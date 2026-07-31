@@ -1,0 +1,15 @@
+.env
+storage/upload/*
+!storage/upload/.gitkeep
+storage/cache/pages/*
+!storage/cache/pages/.gitkeep
+storage/cache/views/
+storage/cache/*.cache.php
+storage/comments/*
+!storage/comments/.gitkeep
+public/assets/articles/*
+!public/assets/articles/.gitkeep
+public/robots.txt
+public/sitemap.xml
+public/assets/themes/*
+!public/assets/themes/.gitkeep

@@ -1,0 +1,7 @@
+{
+    "name": "Default",
+    "version": "1.0.0",
+    "author": "HBP Core Team",
+    "description": "HayabusaPress 標準テーマ。完全自前手書きCSS・フレームワーク不使用の軽量公開画面デザイン。",
+    "screenshot": "screenshot.png"
+}

@@ -1,0 +1,49 @@
+# HayabusaPress (HBP) - .htaccess for the system root placed at the public root (Method A)
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Purpose (spec: "Shared hosting deployment" / Method A):
+#   For environments such as shared hosting where the public directory cannot be
+#   changed to public/, this file lets you place the system directory (the level
+#   this file sits in) at the public root while still serving public/ as the real
+#   document root, by internally rewriting every request.
+#   It also denies direct access to sensitive paths such as core/, storage/,
+#   plugins/, themes/ and .env, preventing leakage of APP_KEY, database passwords
+#   and bcrypt hashes via URLs like https://example.com/.env.
+#
+#   NOTE: This file is for Apache / LiteSpeed only. It has no effect where
+#   AllowOverride is None; in that case use Method B (placing the application
+#   outside the public root, recommended). See deploy/README-shared-hosting.md.
+
+php_flag log_errors on
+php_value error_reporting -1
+
+# ============================================================
+# Internally rewrite every request into public/ (making public/ the effective root)
+# ============================================================
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Requests already pointing inside public/ must not be prefixed twice (prevents an infinite loop)
+    RewriteRule ^public/ - [L]
+
+    # The root ("/") goes to the front controller in public/
+    RewriteRule ^$ public/ [L]
+
+    # Rewrite every other request into public/
+    RewriteRule (.*) public/$1 [L]
+</IfModule>
+
+# ============================================================
+# Deny direct access to sensitive paths
+# (defense in depth; a safety net where .htaccess is honored)
+# ============================================================
+# Return 404 for direct access to core/, storage/, plugins/, themes/ and vendor/
+RedirectMatch 404 ^/(core|storage|plugins|themes|vendor)(/|$)
+
+# Deny .env, .env.*, composer.json|lock and .git outright
+<FilesMatch "(^\.env|\.env\.|composer\.(json|lock)|\.git)">
+    Require all denied
+</FilesMatch>
+
+# Disable directory listings
+Options -Indexes

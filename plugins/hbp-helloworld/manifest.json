@@ -1,0 +1,17 @@
+{
+    "id": "hbp-helloworld",
+    "name": "HBP Hello World",
+    "version": "1.0.0",
+    "author": "HBP Core Team",
+    "description": "チュートリアル用最小プラグイン。manifest.json と plugin.php の2枚だけで新ルートが爆誕する最小構成。",
+    "license": "AGPL-3.0-or-later",
+    "status": "disabled",
+    "routes": {
+        "/hello": {
+            "file": "/plugins/hbp-helloworld/plugin.php",
+            "class": "HbpHelloworldPlugin",
+            "method": "renderPage"
+        }
+    },
+    "hooks": {}
+}

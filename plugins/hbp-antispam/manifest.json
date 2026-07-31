@@ -1,0 +1,23 @@
+{
+    "id": "hbp-antispam",
+    "name": "HBP Hybrid Anti-Spam Shield",
+    "version": "1.0.0",
+    "author": "HBP Core Team",
+    "description": "ハニーポット、インフラ直撃DNS-BL、外部APIを融合した3層スパム防御プラグイン。コメント欄とお問い合わせフォームの両方を同一エンジンで防衛する。",
+    "license": "AGPL-3.0-or-later",
+    "status": "disabled",
+    "hooks": {
+        "before_comment_create": {
+            "file": "plugins/hbp-antispam/plugin.php",
+            "class": "HbpAntispamPlugin",
+            "method": "checkRequest",
+            "priority": 1
+        },
+        "before_contact_send": {
+            "file": "plugins/hbp-antispam/plugin.php",
+            "class": "HbpAntispamPlugin",
+            "method": "checkRequest",
+            "priority": 1
+        }
+    }
+}

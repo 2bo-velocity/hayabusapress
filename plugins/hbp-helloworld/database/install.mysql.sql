@@ -1,0 +1,2 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
+-- hbp-helloworld: DBテーブル不要（チュートリアル用最小プラグイン）

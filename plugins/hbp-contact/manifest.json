@@ -1,0 +1,16 @@
+{
+    "id": "hbp-contact",
+    "name": "HBP Contact Form",
+    "version": "1.0.0",
+    "author": "HBP Core Team",
+    "description": "DBクエリゼロ・メール直送のお問い合わせフォーム。before_contact_send イベントでアンチスパムと自動連動。",
+    "license": "AGPL-3.0-or-later",
+    "status": "disabled",
+    "page_template": "hbp-contact",
+    "template_route": {
+        "file": "/plugins/hbp-contact/plugin.php",
+        "class": "HbpContactPlugin",
+        "method": "renderForm"
+    },
+    "hooks": {}
+}

@@ -1,0 +1,491 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* HayabusaPress - Default Theme CSS (100% hand-written CSS) */
+/* ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --color-bg:       #ffffff;
+    --color-text:     #1e293b;
+    --color-muted:    #64748b;
+    --color-border:   #e2e8f0;
+    --color-primary:  #10b981;
+    --color-link:     #0f172a;
+    --color-code-bg:  #f8fafc;
+    --font-body:      -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono:      'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+    --max-width:      960px;
+    --sidebar-width:  260px;
+    --gap:            1.5rem;
+}
+
+body {
+    font-family:    var(--font-body);
+    font-size:      1rem;
+    line-height:    1.7;
+    color:          var(--color-text);
+    background:     var(--color-bg);
+}
+
+a { color: var(--color-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; }
+
+/* ============================================================
+   Layout
+   ============================================================ */
+
+.hbp-container {
+    max-width:  var(--max-width);
+    margin:     0 auto;
+    padding:    0 1rem;
+}
+
+.hbp-layout {
+    display:  grid;
+    grid-template-columns: 1fr var(--sidebar-width);
+    gap:      var(--gap);
+    padding:  2rem 1rem;
+}
+
+.hbp-main { min-width: 0; }
+.hbp-sidebar-area { min-width: 0; }
+
+/* ============================================================
+   Header
+   ============================================================ */
+
+.hbp-header {
+    border-bottom: 1px solid var(--color-border);
+    padding: .75rem 0;
+    position: sticky;
+    top: 0;
+    background: var(--color-bg);
+    z-index: 100;
+}
+
+.hbp-header .hbp-container {
+    display:         flex;
+    align-items:     center;
+    justify-content: space-between;
+    gap:             1rem;
+}
+
+.hbp-site-title {
+    font-size:   1.25rem;
+    font-weight: 700;
+    color:       var(--color-text);
+}
+
+.hbp-header-nav ul { display: flex; gap: 1.5rem; list-style: none; }
+.hbp-header-nav a  { color: var(--color-text); font-size: .9rem; }
+.hbp-header-nav a:hover { color: var(--color-primary); text-decoration: none; }
+
+.hbp-hamburger {
+    display:        none;
+    flex-direction: column;
+    gap:            5px;
+    background:     none;
+    border:         none;
+    cursor:         pointer;
+    padding:        .25rem;
+}
+.hbp-hamburger span {
+    display:    block;
+    width:      22px;
+    height:     2px;
+    background: var(--color-text);
+    border-radius: 2px;
+}
+
+/* ============================================================
+   SP Menu
+   ============================================================ */
+
+.hbp-sp-menu {
+    background:    var(--color-bg);
+    border-bottom: 1px solid var(--color-border);
+    padding:       .75rem 1rem;
+}
+.hbp-sp-menu ul  { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+.hbp-sp-menu a   { color: var(--color-text); font-size: .9rem; }
+
+/* ============================================================
+   Post cards
+   ============================================================ */
+
+.hbp-posts-list  { display: flex; flex-direction: column; gap: 2rem; }
+
+.hbp-post-card {
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: 2rem;
+}
+.hbp-post-card:last-child { border-bottom: none; }
+
+.hbp-post-title { font-size: 1.25rem; font-weight: 700; margin-bottom: .25rem; }
+.hbp-post-title a { color: var(--color-text); }
+.hbp-post-title a:hover { color: var(--color-primary); text-decoration: none; }
+
+.hbp-post-meta {
+    font-size: .8rem;
+    color:     var(--color-muted);
+    display:   flex;
+    gap:       .75rem;
+    margin-bottom: .75rem;
+}
+
+.hbp-post-excerpt { color: var(--color-muted); font-size: .95rem; margin-bottom: .75rem; }
+
+.hbp-read-more { font-size: .85rem; color: var(--color-primary); }
+
+.hbp-empty { color: var(--color-muted); text-align: center; padding: 3rem; }
+
+/* ============================================================
+   Single Post
+   ============================================================ */
+
+.hbp-article-header  { margin-bottom: 2rem; }
+.hbp-article-title   { font-size: 1.75rem; font-weight: 700; margin-bottom: .5rem; line-height: 1.35; }
+.hbp-article-meta    { font-size: .85rem; color: var(--color-muted); display: flex; gap: .75rem; margin-bottom: 1rem; }
+
+.hbp-tags { display: flex; flex-wrap: wrap; gap: .375rem; }
+.hbp-tag  { font-size: .75rem; background: var(--color-code-bg); border: 1px solid var(--color-border); color: var(--color-muted); padding: .15rem .6rem; border-radius: 999px; }
+.hbp-tag:hover { border-color: var(--color-primary); color: var(--color-primary); text-decoration: none; }
+
+/* ============================================================
+   Content (Markdown output)
+   ============================================================ */
+
+.hbp-content { margin: 2rem 0; }
+.hbp-content h1, .hbp-content h2, .hbp-content h3,
+.hbp-content h4, .hbp-content h5, .hbp-content h6 {
+    font-weight: 700;
+    margin: 1.75rem 0 .75rem;
+    line-height: 1.35;
+}
+.hbp-content h1 { font-size: 1.75rem; }
+.hbp-content h2 { font-size: 1.4rem;  border-bottom: 2px solid var(--color-border); padding-bottom: .25rem; }
+.hbp-content h3 { font-size: 1.15rem; }
+
+.hbp-content p          { margin-bottom: 1.25rem; }
+.hbp-content ul, .hbp-content ol { margin: 1rem 0 1rem 1.5rem; }
+.hbp-content li         { margin-bottom: .25rem; }
+.hbp-content blockquote {
+    border-left: 4px solid var(--color-primary);
+    padding: .5rem 1rem;
+    margin: 1.5rem 0;
+    color: var(--color-muted);
+    background: var(--color-code-bg);
+}
+.hbp-content code {
+    font-family:  var(--font-mono);
+    font-size:    .875em;
+    background:   var(--color-code-bg);
+    border:       1px solid var(--color-border);
+    padding:      .1em .4em;
+    border-radius: .25rem;
+}
+.hbp-content pre {
+    background:  #1e293b;
+    color:       #e2e8f0;
+    padding:     1.25rem;
+    border-radius: .75rem;
+    overflow-x:  auto;
+    margin:      1.5rem 0;
+}
+.hbp-content pre code { background: none; border: none; color: inherit; font-size: .875rem; padding: 0; }
+.hbp-content img      { border-radius: .5rem; margin: 1rem 0; }
+.hbp-content table    { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: .9rem; }
+.hbp-content th, .hbp-content td { border: 1px solid var(--color-border); padding: .5rem .75rem; }
+.hbp-content th       { background: var(--color-code-bg); font-weight: 600; }
+.hbp-content hr       { border: none; border-top: 2px solid var(--color-border); margin: 2rem 0; }
+.hbp-content a        { color: var(--color-primary); }
+
+/* ============================================================
+   Share buttons
+   ============================================================ */
+
+.hbp-share        { margin: 2.5rem 0; }
+.hbp-share-label  { font-size: .8rem; color: var(--color-muted); margin-bottom: .5rem; }
+.hbp-share-links  { display: flex; gap: .5rem; flex-wrap: wrap; }
+.hbp-share-links a {
+    font-size:    .8rem;
+    padding:      .375rem .875rem;
+    border-radius: 999px;
+    text-decoration: none;
+    font-weight:  600;
+}
+.hbp-share-x    { background: #000;    color: #fff; }
+.hbp-share-fb   { background: #1877f2; color: #fff; }
+.hbp-share-line { background: #06c755; color: #fff; }
+.hbp-share-hb   { background: #00a4de; color: #fff; }
+
+/* ============================================================
+   Author profile box
+   ============================================================ */
+
+.hbp-author-profile-box {
+    display:       flex;
+    align-items:   flex-start;   /* Prevents the avatar area from being stretched vertically in a row layout */
+    gap:           1rem;
+    margin:        2.5rem 0;
+    padding:       1.5rem;
+    border:        1px solid var(--color-border);
+    border-radius: 1rem;
+    background:    var(--color-code-bg);
+}
+.hbp-author-avatar-area { flex-shrink: 0; }
+/* Explicitly set width/height to beat both the global img { height:auto } and flex stretching.
+   aspect-ratio + display:block always guarantees a square = a perfect circle. */
+.hbp-avatar-img  { display: block; width: 64px; height: 64px; aspect-ratio: 1 / 1; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.hbp-author-label { font-size: .65rem; font-weight: 700; letter-spacing: .12em; color: var(--color-primary); display: block; }
+.hbp-author-name  { font-size: 1rem; font-weight: 700; margin: .25rem 0; }
+.hbp-author-bio   { font-size: .85rem; color: var(--color-muted); margin-bottom: .5rem; }
+.hbp-author-sns-links { list-style: none; display: flex; gap: .5rem; }
+.hbp-author-sns-links a { font-size: .75rem; color: var(--color-primary); }
+
+/* ============================================================
+   Related posts
+   ============================================================ */
+
+.hbp-related-posts { margin: 2.5rem 0; }
+.hbp-related-title { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; }
+.hbp-related-list  { display: flex; flex-direction: column; gap: .5rem; }
+.hbp-related-item  {
+    display:       flex;
+    justify-content: space-between;
+    align-items:   center;
+    padding:       .75rem 1rem;
+    border:        1px solid var(--color-border);
+    border-radius: .75rem;
+    color:         var(--color-text);
+}
+.hbp-related-item:hover { border-color: var(--color-primary); text-decoration: none; }
+.hbp-related-post-title { font-size: .9rem; }
+.hbp-related-date       { font-size: .75rem; color: var(--color-muted); flex-shrink: 0; }
+
+/* ============================================================
+   Comments
+   ============================================================ */
+
+.hbp-comments-section { margin-top: 3rem; padding-top: 2rem; border-top: 2px solid var(--color-border); }
+.hbp-comments-title   { font-size: 1.25rem; font-weight: 700; margin-bottom: 1.5rem; }
+.hbp-comments-list    { display: flex; flex-direction: column; gap: 1.5rem; margin-bottom: 2rem; }
+.hbp-comment          { padding: 1rem; background: var(--color-code-bg); border-radius: .75rem; }
+.hbp-comment-header   { display: flex; align-items: center; gap: .75rem; margin-bottom: .5rem; }
+.hbp-comment-avatar   { flex-shrink: 0; display: inline-flex; width: 36px; height: 36px; border-radius: 50%; background: var(--color-border); color: var(--color-muted); align-items: center; justify-content: center; overflow: hidden; }
+.hbp-comment-avatar svg { width: 100%; height: 100%; display: block; }
+.hbp-comment-author   { font-size: .9rem; }
+.hbp-comment-date     { font-size: .75rem; color: var(--color-muted); }
+.hbp-comment-content  { font-size: .9rem; }
+.hbp-comment-thanks   { padding: .75rem 1rem; background: #f0fdf4; border-radius: .5rem; color: #15803d; font-size: .9rem; margin-bottom: 1.5rem; }
+
+.hbp-comment-form-wrap h4 { font-size: 1rem; font-weight: 700; margin-bottom: 1rem; }
+.hbp-comment-form { display: flex; flex-direction: column; gap: 1rem; max-width: 560px; }
+.hbp-form-group label { display: block; font-size: .85rem; margin-bottom: .25rem; color: var(--color-muted); }
+.hbp-form-group input, .hbp-form-group textarea {
+    width:         100%;
+    padding:       .625rem .875rem;
+    border:        1px solid var(--color-border);
+    border-radius: .625rem;
+    font-size:     .9rem;
+    font-family:   var(--font-body);
+    color:         var(--color-text);
+}
+.hbp-form-group input:focus, .hbp-form-group textarea:focus {
+    outline:      none;
+    border-color: var(--color-primary);
+}
+.required { color: #ef4444; }
+.hbp-btn-submit {
+    background:    var(--color-primary);
+    color:         #fff;
+    border:        none;
+    padding:       .75rem 1.5rem;
+    border-radius: .625rem;
+    font-size:     .9rem;
+    font-weight:   600;
+    cursor:        pointer;
+    align-self:    flex-start;
+}
+.hbp-btn-submit:hover { background: #059669; }
+
+/* ============================================================
+   Sidebar widgets
+   ============================================================ */
+
+.hbp-sidebar-area .widget     { margin-bottom: 1.5rem; }
+.hbp-sidebar-area .widget h3  { font-size: .9rem; font-weight: 700; margin-bottom: .75rem; padding-bottom: .375rem; border-bottom: 2px solid var(--color-border); }
+.hbp-sidebar-area .widget ul  { list-style: none; }
+.hbp-sidebar-area .widget li  { padding: .25rem 0; font-size: .875rem; }
+.hbp-sidebar-area .widget a   { color: var(--color-text); }
+.hbp-sidebar-area .widget a:hover { color: var(--color-primary); text-decoration: none; }
+
+.widget-search form { display: flex; gap: .375rem; }
+.widget-search input[type="search"] {
+    flex:          1;
+    padding:       .375rem .625rem;
+    border:        1px solid var(--color-border);
+    border-radius: .5rem;
+    font-size:     .875rem;
+}
+.widget-search button {
+    padding:       .375rem .75rem;
+    background:    var(--color-primary);
+    color:         #fff;
+    border:        none;
+    border-radius: .5rem;
+    font-size:     .8rem;
+    cursor:        pointer;
+}
+
+/* ============================================================
+   Archive title / pagination
+   ============================================================ */
+
+.hbp-archive-title { font-size: 1.4rem; font-weight: 700; margin-bottom: 1.5rem; padding-bottom: .75rem; border-bottom: 2px solid var(--color-border); }
+
+.hbp-pagination {
+    display:         flex;
+    align-items:     center;
+    justify-content: center;
+    gap:             1rem;
+    margin-top:      2.5rem;
+    font-size:       .9rem;
+}
+.hbp-page-link { color: var(--color-primary); }
+.hbp-page-info { color: var(--color-muted); }
+
+/* ============================================================
+   Nav (compiled HTML)
+   ============================================================ */
+
+.hbp-nav ul { list-style: none; display: flex; gap: 1rem; }
+.hbp-nav a  { color: var(--color-text); font-size: .875rem; }
+.hbp-nav a:hover { color: var(--color-primary); text-decoration: none; }
+
+/* ============================================================
+   Footer
+   ============================================================ */
+
+.hbp-footer {
+    border-top:  2px solid var(--color-border);
+    margin-top:  3rem;
+    padding:     2rem 0;
+    background:  var(--color-bg);
+}
+.hbp-footer-nav { margin-bottom: .75rem; }
+.hbp-footer-copy { font-size: .8rem; color: var(--color-muted); }
+.hbp-footer-copy a { color: var(--color-muted); }
+
+/* ============================================================
+   Responsive
+   ============================================================ */
+
+@media (max-width: 700px) {
+    .hbp-layout {
+        grid-template-columns: 1fr;
+        padding: 1rem;
+    }
+    .hbp-sidebar-area { order: 2; }
+    .hbp-header-nav { display: none; }
+    .hbp-hamburger  { display: flex; }
+    .hbp-article-title { font-size: 1.35rem; }
+    .hbp-author-profile-box { flex-direction: column; }
+    .hbp-related-item { flex-direction: column; align-items: flex-start; gap: .25rem; }
+}
+
+/* ============================================================
+   v6/P-series: content language switcher
+   ============================================================ */
+.hbp-lang-switcher {
+    display: flex;
+    gap: .375rem;
+    align-items: center;
+}
+.hbp-lang-switcher a {
+    display: inline-block;
+    padding: .25rem .5rem;
+    font-size: .75rem;
+    font-weight: 600;
+    border: 1px solid var(--color-border);
+    border-radius: .375rem;
+    color: var(--color-muted);
+    text-decoration: none;
+    transition: border-color .15s, color .15s;
+}
+.hbp-lang-switcher a:hover,
+.hbp-lang-switcher a.hbp-lang-active {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+}
+
+/* =============================================================
+   v7.1: ruby (furigana) and emphasis dots (bouten)
+   MarkdownCompiler bakes <ruby>/<em class="hbp-bouten"> at save time.
+   The appearance is supplied by the theme CSS (inline style is not used because the sanitizer removes it).
+   ============================================================= */
+ruby rt {
+    font-size: .5em;
+    line-height: 1;
+    text-align: center;
+    font-weight: normal;
+}
+.hbp-bouten {
+    font-style: normal;                 /* Do not italicize */
+    text-emphasis: filled sesame;       /* Sesame dots. For round dots use 'filled dot' */
+    -webkit-text-emphasis: filled sesame;
+    text-emphasis-position: over right;
+    -webkit-text-emphasis-position: over right;
+}
+
+/* ============================================================
+   v7.10: featured image display (listing thumbnail / detail header image) + public search
+   ============================================================ */
+
+/* Listing card thumbnail */
+.hbp-card-thumb {
+    display: block;
+    margin-bottom: .75rem;
+    overflow: hidden;
+    border-radius: 8px;
+}
+.hbp-card-thumb img {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    transition: transform .25s ease;
+}
+.hbp-card-thumb:hover img { transform: scale(1.03); }
+
+/* Detail-page header image */
+.hbp-featured-image {
+    margin: 0 0 1.5rem;
+    border-radius: 8px;
+    overflow: hidden;
+}
+.hbp-featured-image img {
+    display: block;
+    width: 100%;
+    height: auto;
+    object-fit: cover;
+}
+
+/* Public search box */
+.hbp-search-box { margin-bottom: 1.5rem; }
+.hbp-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 16px;                /* Prevent zoom on iOS */
+    padding: .7rem 1rem;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg, #fff);
+    color: var(--color-text);
+}
+.hbp-search-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}

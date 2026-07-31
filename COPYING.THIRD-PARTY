@@ -1,0 +1,60 @@
+Third-Party Software Notices and Copyrights
+
+HayabusaPress includes the following third-party components in its administrative
+interface. Each is licensed under its own terms, which are compatible with the
+GNU Affero General Public License v3 or later (AGPL-3.0-or-later) of this project.
+
+--------------------------------------------------------------------------------
+
+1. Tailwind CSS
+
+   Copyright (c) Tailwind Labs, Inc.
+   License: MIT License
+   Source:  https://github.com/tailwindlabs/tailwindcss
+   Full license text: https://github.com/tailwindlabs/tailwindcss/blob/master/LICENSE
+
+   Usage in HBP:
+   Built via Tailwind standalone CLI; the resulting CSS is served from
+   public/admin/assets/admin.css. Not embedded in the public-facing theme.
+
+--------------------------------------------------------------------------------
+
+2. Lucide Icons
+
+   Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022
+   as part of Feather (MIT). All other copyright (c) for Lucide are held by
+   Lucide Contributors 2022.
+   License: ISC License
+   Source:  https://github.com/lucide-icons/lucide
+   Full license text: https://github.com/lucide-icons/lucide/blob/main/LICENSE
+
+   Usage in HBP:
+   SVG path data is inlined directly into admin templates (core/admin_views/*.tpl.php)
+   for icon rendering. No external file or font is loaded at runtime.
+
+--------------------------------------------------------------------------------
+
+3. marked.js (optional / CDN only)
+
+   Copyright (c) 2011-2023, Christopher Jeffrey (https://github.com/chjj)
+   License: MIT License
+   Source:  https://github.com/markedjs/marked
+   Full license text: https://github.com/markedjs/marked/blob/master/LICENSE.md
+
+   Usage in HBP:
+   Optionally loaded via CDN in the admin Markdown editor for live preview only.
+   Not bundled; not used in the public-facing theme.
+
+--------------------------------------------------------------------------------
+
+Compatibility Note:
+
+The MIT and ISC licenses applied to the components above are permissive licenses
+fully compatible with the GNU Affero General Public License v3 or later. Both
+permit inclusion within (A)GPL-licensed projects without altering the overall
+licensing terms of HayabusaPress itself.
+
+HayabusaPress is an original work and does not contain any code from WordPress
+or any other GPL-licensed CMS. The choice of AGPL-3.0-or-later for HBP is made
+independently and is not the result of copyleft propagation from any external
+source.

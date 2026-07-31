@@ -1,0 +1,17 @@
+{
+    "id": "sample-related-posts",
+    "name": "Sample Related Posts",
+    "version": "1.0.0",
+    "author": "HayabusaPress",
+    "description": "Demonstrates how to register a hook that fires after a post is saved.",
+    "license": "AGPL-3.0-or-later",
+    "status": "disabled",
+    "hooks": {
+        "post_saved": {
+            "file": "plugins/sample-related-posts/plugin.php",
+            "class": "SampleRelatedPostsPlugin",
+            "method": "onPostSaved",
+            "priority": 10
+        }
+    }
+}

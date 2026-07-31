@@ -1,0 +1,15 @@
+Options -Indexes
+RewriteEngine On
+
+# Deny direct access to storage/ and core/
+RewriteRule ^(storage|core|plugins|themes)/ - [F,L]
+
+# Let existing files and directories through untouched
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Route everything that is not a real file/directory to the front controller.
+# Dispatching to the admin panel (under ADMIN_PATH) is done by index.php after it
+# reads .env, so no fixed "admin" rewrite belongs here (this keeps ADMIN_PATH freely
+# changeable).
+RewriteRule ^ index.php [QSA,L]

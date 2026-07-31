@@ -1,0 +1,23 @@
+{
+    "id": "hbp-badwords",
+    "name": "HBP Static Badwords Filter",
+    "version": "1.0.0",
+    "author": "HBP Core Team",
+    "description": "ランタイムDBクエリ0。保存時にコンパイルされた静的キーワード配列で、コメント・お問い合わせの荒らしを一網打尽にする超軽量検閲プラグイン。",
+    "license": "AGPL-3.0-or-later",
+    "status": "disabled",
+    "hooks": {
+        "before_comment_create": {
+            "file": "plugins/hbp-badwords/plugin.php",
+            "class": "HbpBadwordsPlugin",
+            "method": "interceptRequest",
+            "priority": 5
+        },
+        "before_contact_send": {
+            "file": "plugins/hbp-badwords/plugin.php",
+            "class": "HbpBadwordsPlugin",
+            "method": "interceptRequest",
+            "priority": 5
+        }
+    }
+}

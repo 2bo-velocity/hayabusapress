@@ -1,0 +1,2 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
+-- sample-related-posts: DBテーブル不要のため削除処理なし

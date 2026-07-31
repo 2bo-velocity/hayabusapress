@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* HayabusaPress — Admin Tailwind CSS Source
+ *
+ * Build command (from project root):
+ *   ./tailwindcss -i core/admin_views/admin.src.css \
+ *                 -o public/admin/assets/admin.css \
+ *                 --minify
+ *
+ * The compiled output is served as public/admin/assets/admin.css
+ * allowing strict CSP (style-src 'self') in production.
+ *
+ * Without the compiled file, the admin UI falls back to Tailwind Play CDN
+ * (development only — not suitable for production CSP).
+ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

@@ -1,0 +1,2 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
+-- hbp-contact: DBテーブル不要（お問い合わせはメール直送、DBへのINSERTなし）
