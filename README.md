@@ -1201,7 +1201,18 @@ As a special exception, third-party extensions that merely interact with Hayabus
 
 > ⚠️ **The exception covers independent extensions only.** Patched core files, forks, and derivatives of the official plugins or themes remain fully subject to the AGPLv3.
 
+### 🟡 Commercial Licensing — when the AGPLv3 does not fit
+
+If the AGPLv3 — in particular Section 13 — is not compatible with how you intend to deploy HayabusaPress, a separate commercial license is available from the copyright holder. Contact **support@2bo-velocity.com**.
+
+- **You need it for:** modifying the core and not publishing the changes, embedding HayabusaPress in a product you distribute, or operating a modified version as a network service.
+- **You do not need it for:** running HayabusaPress unmodified for your own sites, or developing and selling proprietary third-party plugins and themes — the exception above already covers that at no cost.
+
 Full text and the exact wording of the exception: [LICENSE](LICENSE). Explanation and FAQ: [hayabusapress.org/docs/legal/license](https://hayabusapress.org/docs/legal/license).
+
+### Contributing
+
+Pull requests are welcome — please read **[CONTRIBUTING.md](CONTRIBUTING.md)** first. Because HayabusaPress is also offered under a commercial licence, contributing carries an explicit licence grant, and the document states plainly what you agree to.
 
 ### Third-Party Notices
 

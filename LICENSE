@@ -55,6 +55,24 @@ HayabusaPress itself -- including patched core files, forks, and derivatives of
 the official plugins or themes -- remain fully subject to the AGPLv3.
 
 
+------------------------------------------------------------------------------
+Commercial Licensing
+------------------------------------------------------------------------------
+
+HayabusaPress is available under the AGPLv3 as stated above. If those terms --
+in particular Section 13 (Remote Network Interaction) -- are not compatible
+with how you intend to deploy it, a separate commercial license is available
+from the copyright holder.
+
+Contact: support@2bo-velocity.com
+
+A commercial license is NOT required in order to develop, distribute or sell
+proprietary third-party plugins and themes. The Plugin & Theme Exception above
+already permits that at no cost. The commercial license concerns HayabusaPress
+core itself: modifying it, embedding it in a product, or operating a modified
+version as a network service without the AGPLv3 source obligations.
+
+
 ==============================================================================
 GNU AFFERO GENERAL PUBLIC LICENSE (full text)
 ==============================================================================
