@@ -115,6 +115,37 @@ class AdminUserController
         }
     }
 
+    /**
+     * Change a staff member's role. Losing post:raw_html does not by itself change posts already
+     * saved (their trust is recorded per post); $revokeRawHtml re-assesses the bodies this user last
+     * saved, so their embeds go too.
+     *
+     * @return int posts whose embeds were turned off
+     */
+    public static function changeRole(int $userId, string $role, bool $revokeRawHtml): int
+    {
+        Gate::authorize('user:manage');
+        if (Auth::id() === $userId) {
+            throw new RuntimeException(HbpLocale::t('err_cannot_change_own_role', 'You cannot change your own role.'));
+        }
+        if (!in_array($role, ['administrator', 'editor', 'author', 'contributor'], true)) {
+            throw new InvalidArgumentException(HbpLocale::t('err_role_invalid', 'Invalid role.'));
+        }
+        DB::execute('UPDATE users SET role=? WHERE id=?', [$role, $userId]);
+
+        require_once CORE_PATH . '/PostCompiler.php';
+        if (!$revokeRawHtml || PostCompiler::roleAllowsRaw($role)) {
+            return 0;
+        }
+        $changed = PostCompiler::reassess($userId);
+        if ($changed !== []) {
+            PostCompiler::recompile($changed);
+            require_once CORE_PATH . '/CacheManager.php';
+            CacheManager::purgeAll();
+        }
+        return count($changed);
+    }
+
     public static function delete(int $userId): void
     {
         Gate::authorize('user:manage');

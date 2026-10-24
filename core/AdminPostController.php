@@ -148,8 +148,8 @@ class AdminPostController
             );
             foreach ($attRows as $r) {
                 $fn = basename((string)$r['filename']);
-                if ($fn === '') {
-                    continue;
+                if ($fn === '' || self::isWebpTwin($fn)) {
+                    continue;   // WebP twins follow their original; the editor never shows them
                 }
                 $attachments[] = [
                     'filename'      => $fn,
@@ -184,6 +184,29 @@ class AdminPostController
                     $seed['page_template'] = $pt;
                 }
             }
+            // A post template (copied, never linked: editing the template later changes nothing here)
+            $tplId = (int)($prefill['template'] ?? 0);
+            $tpl   = $tplId > 0 ? DB::fetchOne('SELECT * FROM post_templates WHERE id = ? LIMIT 1', [$tplId]) : null;
+            if ($tpl) {
+                $today = (new DateTimeImmutable('now', new DateTimeZone(Env::get('APP_TIMEZONE', 'UTC'))))->format('Y-m-d');
+                $seed  = [
+                    'type'             => (string)$tpl['type'],
+                    'lang'             => (string)$tpl['lang'],
+                    'title'            => str_replace('{date}', $today, (string)$tpl['title']),
+                    'content_markdown' => str_replace('{date}', $today, (string)$tpl['body']),
+                    'category_id'      => $tpl['category_id'],
+                    'layout'           => $tpl['layout'],
+                    'show_toc'         => (int)!empty($tpl['show_toc']),
+                    'is_sponsored'     => (int)!empty($tpl['is_sponsored']),
+                ];
+                // Tags are kept by name; offer the ones that exist for this type and language
+                $names = array_map('mb_strtolower', preg_split('/\s*,\s*/u', (string)($tpl['tags'] ?? ''), -1, PREG_SPLIT_NO_EMPTY) ?: []);
+                foreach ($tags as $t) {
+                    if ($t['type'] === $seed['type'] && $t['lang'] === $seed['lang'] && in_array(mb_strtolower((string)$t['name']), $names, true)) {
+                        $selectedTags[] = $t['id'];
+                    }
+                }
+            }
             if ($seed) {
                 $post = $seed;
             }
@@ -198,9 +221,24 @@ class AdminPostController
             }
         }
 
+        // Raw-HTML trust recorded on the post, for the editor badge and the "your save strips it" warning
+        require_once CORE_PATH . '/PostCompiler.php';
+        $recorded = $post && $post['content_saved_by'] !== null;
+        $rawTrust = [
+            'recorded'   => $recorded,
+            'allowed'    => $recorded && !empty($post['raw_html_allowed']),
+            'saver'      => $recorded ? PostCompiler::saverName((int)$post['content_saved_by']) : '',
+            'mayUseRaw'  => PostCompiler::currentMayUseRaw(),
+        ];
+
         return [
             // On new creation, return an empty array instead of null (so $post['x'] ?? '' works in templates and avoids warnings)
             'post'           => $post ?: [],
+            'rawTrust'       => $rawTrust,
+            'postTemplates'  => $postId ? [] : DB::fetchAll('SELECT id, name FROM post_templates ORDER BY name'),
+            'publishSlots'   => (function () use ($post) { require_once CORE_PATH . '/PublishSlots.php'; return !empty($post['id']) ? PublishSlots::slots() : []; })(),
+            'nextFreeSlot'   => (function () use ($post) { require_once CORE_PATH . '/PublishSlots.php'; return !empty($post['id']) ? PublishSlots::nextFree() : null; })(),
+            'redirects'      => $post ? (function () use ($post) { require_once CORE_PATH . '/RedirectCompiler.php'; return RedirectCompiler::forPost((int)$post['id']); })() : [],
             'categories'     => $categories,
             'tags'           => $tags,
             'selected_tags'  => $selectedTags,
@@ -248,6 +286,17 @@ class AdminPostController
         }
 
         DB::execute('DELETE FROM attachments WHERE id = ?', [(int)$row['id']]);
+
+        // The WebP twin goes with its original
+        if (!self::isWebpTwin($fn)) {
+            $twin = $fn . '.webp';
+            foreach ([Media::articlePath($twin), Media::uploadPath($twin)] as $f) {
+                if (is_file($f)) {
+                    @unlink($f);
+                }
+            }
+            DB::execute('DELETE FROM attachments WHERE post_id = ? AND filename = ?', [$postId, $twin]);
+        }
     }
 
     /** Save a post (shared for new and update) */
@@ -286,7 +335,7 @@ class AdminPostController
             }
         }
 
-        $slug      = self::buildSlug($input['slug'] ?? '', $title, $type, $lang, $postId);
+        $slug      = self::buildSlug($input['slug'] ?? '', $title, $type, $lang, $postId, $scheduledAt);
         $catId     = !empty($input['category_id']) ? (int)$input['category_id'] : null;
 
         // Flags
@@ -329,14 +378,29 @@ class AdminPostController
         $metaKeywords    = mb_substr($metaKeywords, 0, 255);
         $featuredAlt     = $featuredAlt !== null ? mb_substr($featuredAlt, 0, 255) : null;
 
-        // Markdown -> HTML compile (per-role raw_html decision + HtmlSanitizer)
-        $allowRawHtml = Auth::isSuperUser() || Gate::can('post:raw_html');
+        // Markdown -> HTML compile. Raw HTML follows whoever last saved the body (PostCompiler):
+        // an unchanged body keeps the recorded trust, a changed one takes the saver's permission.
+        require_once CORE_PATH . '/PostCompiler.php';
+        $previous = $postId > 0
+            ? DB::fetchOne('SELECT content_markdown, raw_html_allowed, content_saved_by FROM posts WHERE id = ? LIMIT 1', [$postId])
+            : null;
+        [$allowRawHtml, $contentSavedBy] = PostCompiler::trustForSave($previous ?: null, $markdown);
+        require_once CORE_PATH . '/SeoCompiler.php';
         // The table of contents and the sponsored notice are baked here too (options of the same pass)
         $contentHtml  = MarkdownCompiler::render($markdown, $allowRawHtml, [
             'toc'       => (bool)$showToc,
             'sponsored' => (bool)$isSponsored,
             'lang'      => $lang,
         ]);
+        // Description used when meta_description is left empty (SeoCompiler::buildMeta)
+        $metaDescAuto = SeoCompiler::excerpt($contentHtml);
+        $metaDescAuto = $metaDescAuto !== '' ? mb_substr($metaDescAuto, 0, 255) : null;
+
+        // Social-post text: typed (kept as typed, NULL when empty) and generated (always refreshed)
+        $shareText = trim(str_replace(["\r\n", "\r"], "\n", (string)($input['share_text'] ?? '')));
+        $shareText = $shareText !== '' ? mb_substr($shareText, 0, 500) : null;
+        $catTags   = $catId ? (DB::fetchOne('SELECT hashtags FROM categories WHERE id = ? LIMIT 1', [$catId])['hashtags'] ?? null) : null;
+        $shareAuto = PostCompiler::shareText($title, $metaDescription !== '' ? $metaDescription : (string)$metaDescAuto, $catTags);
 
         // Author ID (NULL for Super User)
         $userId = Auth::id() === 0 ? null : Auth::id();
@@ -372,16 +436,20 @@ class AdminPostController
                 'INSERT INTO posts
                  (type, lang, slug, title, content_markdown, content_html, status, category_id,
                   tags_cache, allow_comment, show_related_posts,
-                  show_share, meta_description, meta_keywords,
-                  user_id, show_author, show_toc, is_sponsored, page_template, layout, trans_group,
+                  show_share, meta_description, meta_keywords, meta_description_auto,
+                  share_text, share_text_auto,
+                  user_id, show_author, show_toc, is_sponsored, raw_html_allowed, content_saved_by,
+                  page_template, layout, trans_group,
                   featured_image, featured_image_alt,
                   comment_count, published_at, created_at, updated_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)',
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)',
                 [
                     $type, $lang, $slug, $title, $markdown, $contentHtml, $status, $catId,
                     $tagsCache, $allowComment, $showRelatedPosts,
-                    $showShare, $metaDescription, $metaKeywords,
-                    $userId, $showAuthor, $showToc, $isSponsored, $pageTemplate, $layout, $transGroup ?: null,
+                    $showShare, $metaDescription, $metaKeywords, $metaDescAuto,
+                    $shareText, $shareAuto,
+                    $userId, $showAuthor, $showToc, $isSponsored, $allowRawHtml ? 1 : 0, $contentSavedBy,
+                    $pageTemplate, $layout, $transGroup ?: null,
                     $featuredImage, $featuredAlt,
                     $publishedAt, $now, $now,
                 ]
@@ -389,7 +457,7 @@ class AdminPostController
             $postId = (int)DB::lastInsertId();
         } else {
             // Update
-            $existing      = DB::fetchOne('SELECT status, trans_group, published_at FROM posts WHERE id = ? LIMIT 1', [$postId]);
+            $existing      = DB::fetchOne('SELECT type, lang, slug, status, trans_group, published_at FROM posts WHERE id = ? LIMIT 1', [$postId]);
             $oldStatus     = $existing['status'] ?? 'draft';
             $oldTransGroup = $existing['trans_group'] ?? '';
             // If already first-published, do not change published_at (so the posting time does not change on re-edit)
@@ -408,15 +476,19 @@ class AdminPostController
                 'UPDATE posts SET
                    type=?, lang=?, slug=?, title=?, content_markdown=?, content_html=?, status=?,
                    category_id=?, tags_cache=?, allow_comment=?, show_related_posts=?,
-                   show_share=?, meta_description=?, meta_keywords=?,
-                   show_author=?, show_toc=?, is_sponsored=?, page_template=?, layout=?, trans_group=?,
+                   show_share=?, meta_description=?, meta_keywords=?, meta_description_auto=?,
+                   share_text=?, share_text_auto=?,
+                   show_author=?, show_toc=?, is_sponsored=?, raw_html_allowed=?, content_saved_by=?,
+                   page_template=?, layout=?, trans_group=?,
                    featured_image=?, featured_image_alt=?, published_at=?, updated_at=?
                  WHERE id=?',
                 [
                     $type, $lang, $slug, $title, $markdown, $contentHtml, $status,
                     $catId, $tagsCache, $allowComment, $showRelatedPosts,
-                    $showShare, $metaDescription, $metaKeywords,
-                    $showAuthor, $showToc, $isSponsored, $pageTemplate, $layout, $transGroup ?: null,
+                    $showShare, $metaDescription, $metaKeywords, $metaDescAuto,
+                    $shareText, $shareAuto,
+                    $showAuthor, $showToc, $isSponsored, $allowRawHtml ? 1 : 0, $contentSavedBy,
+                    $pageTemplate, $layout, $transGroup ?: null,
                     $featuredImage, $featuredAlt, $publishedAt, $now, $postId,
                 ]
             );
@@ -430,6 +502,16 @@ class AdminPostController
                 }
             }
         }
+
+        // Old URL of a post that was public keeps working as a 301 (and a reused slug wins over a redirect)
+        require_once CORE_PATH . '/RedirectCompiler.php';
+        $wasPublic = isset($existing) && ($existing['status'] ?? '') === 'published';
+        RedirectCompiler::recordRename(
+            $postId,
+            (string)($existing['type'] ?? $type), (string)($existing['lang'] ?? $lang), $wasPublic ? (string)$existing['slug'] : '',
+            $type, $lang, $slug
+        );
+        RedirectCompiler::compile();
 
         // Update the tag junction table (also stamps the listing keys onto each junction row)
         require_once CORE_PATH . '/PostTagIndex.php';
@@ -648,6 +730,10 @@ class AdminPostController
     /** Shared processing for precise FPC purge + rebuilding related caches (category/sidebar/sitemap/feed/scheduler) */
     private static function purgePostCaches(array $post): void
     {
+        // Redirects only point at published posts: trash/restore/delete change that set
+        require_once CORE_PATH . '/RedirectCompiler.php';
+        RedirectCompiler::compile();
+
         require_once CORE_PATH . '/CacheManager.php';
         $catSlug = '';
         if (!empty($post['category_id'])) {
@@ -724,6 +810,9 @@ class AdminPostController
         $counterBefore = Counters::snapshot($postId);
 
         DB::execute('DELETE FROM posts WHERE id = ?', [$postId]);
+        // slug_redirects rows go with the post (ON DELETE CASCADE); rebuild the compiled map
+        require_once CORE_PATH . '/RedirectCompiler.php';
+        RedirectCompiler::compile();
 
         // snapshot() now returns null, which is exactly "contributes nothing"
         Counters::applyPostChange($counterBefore, Counters::snapshot($postId));
@@ -775,13 +864,36 @@ class AdminPostController
 
     // ---- Private helpers ----
 
-    private static function buildSlug(string $raw, string $title, string $type, string $lang, int $postId): string
+    /**
+     * Slug from the typed value, or — when it is empty — by the SEO setting slug_mode:
+     *   title    : ASCII words of the title (the default)
+     *   datetime : YYYYMMDD-HHMM in APP_TIMEZONE (the scheduled time for a scheduled post)
+     *   id       : p{ID}
+     * A title with no ASCII left, and "id" before the post has an ID, fall back to datetime.
+     */
+    private static function buildSlug(string $raw, string $title, string $type, string $lang, int $postId, ?string $scheduledAtUtc = null): string
     {
-        $slug = $raw !== '' ? $raw : mb_strtolower(preg_replace('/[^\w-]/u', '-', $title));
+        $mode = 'title';
+        if ($raw === '') {
+            require_once CORE_PATH . '/SeoCompiler.php';
+            $mode = (string)(SeoCompiler::loadGlobal()['slug_mode'] ?? 'title');
+        }
+        $slug = '';
+        if ($raw !== '') {
+            $slug = $raw;
+        } elseif ($mode === 'id' && $postId > 0) {
+            $slug = 'p' . $postId;
+        } elseif ($mode === 'title') {
+            $slug = mb_strtolower(preg_replace('/[^\w-]/u', '-', $title));
+        }
         $slug = strtolower(preg_replace('/[^a-z0-9-]/i', '-', $slug));
         $slug = trim(preg_replace('/-+/', '-', $slug), '-');
         if ($slug === '') {
-            $slug = 'post-' . time();
+            $tz   = new DateTimeZone(Env::get('APP_TIMEZONE', 'UTC'));
+            $when = $scheduledAtUtc !== null
+                ? new DateTimeImmutable($scheduledAtUtc, new DateTimeZone('UTC'))
+                : new DateTimeImmutable('now');
+            $slug = $when->setTimezone($tz)->format('Ymd-Hi');
         }
         // slug length limit (200 chars)
         $slug = mb_substr($slug, 0, 200);
@@ -878,6 +990,47 @@ class AdminPostController
      * JPEG at quality 90, PNG/WebP nearly lossless, GIF re-saved.
      * public because avatar upload (AdminUserController) shares it too.
      */
+    /** WebP twins are named after their original: "{hash}.jpg" -> "{hash}.jpg.webp". */
+    public static function isWebpTwin(string $filename): bool
+    {
+        return (bool)preg_match('/\.(jpe?g|png)\.webp$/i', $filename);
+    }
+
+    /**
+     * Write {file}.webp next to a re-encoded JPEG/PNG. Skipped when GD has no WebP support or
+     * IMAGE_WEBP=off, and when the WebP would not be smaller.
+     *
+     * @return string|null the twin's filename
+     */
+    private static function makeWebpTwin(string $path, string $mime): ?string
+    {
+        if (!in_array($mime, ['image/jpeg', 'image/png'], true) || !function_exists('imagewebp')
+            || strtolower(Env::get('IMAGE_WEBP', 'auto')) === 'off') {
+            return null;
+        }
+        $img = $mime === 'image/jpeg' ? @imagecreatefromjpeg($path) : @imagecreatefrompng($path);
+        if ($img === false) {
+            return null;
+        }
+        if ($mime === 'image/png') {
+            imagepalettetotruecolor($img);
+            imagealphablending($img, false);
+            imagesavealpha($img, true);
+        }
+        $twin = basename($path) . '.webp';
+        $out  = Media::uploadPath($twin);
+        $ok   = @imagewebp($img, $out, 82);
+        imagedestroy($img);
+        if (!$ok || !is_file($out)) {
+            return null;
+        }
+        if (filesize($out) >= filesize($path)) {
+            @unlink($out);
+            return null;
+        }
+        return $twin;
+    }
+
     public static function reencodeImage(string $src, string $dest, string $mime): void
     {
         $img = match ($mime) {
@@ -1015,6 +1168,17 @@ class AdminPostController
             [$postId, $filename, mb_substr(basename((string)$file['name']), 0, 255), $mime, (int)$file['size']]
         );
 
+        // WebP twin ({file}.webp) for JPEG/PNG. It is an attachments row of its own, so publishing,
+        // unpublishing, deletion and media:gc move or remove it exactly like the original.
+        $webp = $isImage ? self::makeWebpTwin($dest, $mime) : null;
+        if ($webp !== null) {
+            DB::execute(
+                'INSERT INTO attachments (post_id, filename, original_name, mime_type, file_size, created_at)
+                 VALUES (?, ?, ?, ?, ?, NOW())',
+                [$postId, $webp, mb_substr(basename((string)$file['name']) . '.webp', 0, 255), 'image/webp', (int)@filesize(Media::uploadPath($webp))]
+            );
+        }
+
         // always store the production URL in the body (because the body is not rewritten on publish).
         // Images added to an already-published post are immediately moved physically to public/ too.
         $post = DB::fetchOne('SELECT status FROM posts WHERE id = ? LIMIT 1', [$postId]);
@@ -1022,6 +1186,10 @@ class AdminPostController
             $articleDest = Media::articlePath($filename);
             Media::ensureDirForFile($articleDest);     // ensure the destination shard intermediate
             @rename($dest, $articleDest);
+            if ($webp !== null) {
+                Media::ensureDirForFile(Media::articlePath($webp));
+                @rename(Media::uploadPath($webp), Media::articlePath($webp));
+            }
         }
         // Even when unpublished, return the production URL (sharded). The preview (/preview)
         // auto-swaps only files remaining in storage/upload to the management delivery URL, so it does not 404.

@@ -190,4 +190,50 @@ class CacheManager
             }
         }
     }
+
+    /**
+     * Send ETag / Last-Modified for a cached page and answer a matching conditional request.
+     *
+     * Both validators come from the file itself (one stat), so a purge-and-regenerate changes them
+     * and nothing else has to track versions. Cache-Control: no-cache lets a browser or crawler keep
+     * the copy but makes it ask every time; without it, a Last-Modified alone invites heuristic
+     * caching that could hide an edit for hours.
+     *
+     * @return bool true when a 304 was sent (the caller must not send a body)
+     */
+    public static function sendValidators(string $file): bool
+    {
+        $st = @stat($file);
+        if ($st === false) {
+            return false;
+        }
+        $etag     = 'W/"' . dechex((int)$st['mtime']) . '-' . dechex((int)$st['size']) . '"';
+        $modified = gmdate('D, d M Y H:i:s', (int)$st['mtime']) . ' GMT';
+        header('Cache-Control: no-cache');
+        header('ETag: ' . $etag);
+        header('Last-Modified: ' . $modified);
+
+        $inm = (string)($_SERVER['HTTP_IF_NONE_MATCH'] ?? '');
+        if ($inm !== '') {
+            // Weak comparison (RFC 9110 13.1.2): ignore the W/ prefix on either side
+            $want = substr($etag, 2);
+            foreach (explode(',', $inm) as $tag) {
+                $tag = trim($tag);
+                if ($tag === '*' || preg_replace('#^W/#', '', $tag) === $want) {
+                    http_response_code(304);
+                    return true;
+                }
+            }
+            return false;   // If-None-Match present: If-Modified-Since is ignored
+        }
+        $ims = (string)($_SERVER['HTTP_IF_MODIFIED_SINCE'] ?? '');
+        if ($ims !== '') {
+            $t = strtotime($ims);
+            if ($t !== false && (int)$st['mtime'] <= $t) {
+                http_response_code(304);
+                return true;
+            }
+        }
+        return false;
+    }
 }

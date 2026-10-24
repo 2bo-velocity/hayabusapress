@@ -394,6 +394,7 @@ CSP_MODE=report-only
 CSP_IMG_HOSTS=""
 CSP_SCRIPT_HOSTS=""
 SPONSORED_NOTICE_TEXT=""
+IMAGE_WEBP=auto
 AUTO_LANG_REDIRECT=false
 EMBED_HOSTS="www.youtube-nocookie.com,player.vimeo.com"
 LIST_PAGE_SIZE=10
@@ -569,8 +570,9 @@ ENV,
                     "INSERT INTO posts
                      (type, lang, slug, title, content_markdown, content_html, status, category_id,
                       allow_comment, show_related_posts, show_share, show_author,
+                      raw_html_allowed, content_saved_by,
                       user_id, comment_count, created_at, updated_at)
-                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,?,?)",
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,TRUE,0,NULL,0,?,?)",
                     [
                         'post', $defaultLang, 'hello-world', $sample['title'],
                         $helloMarkdown, $helloHtml, 'published', $catId,

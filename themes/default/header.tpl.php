@@ -27,8 +27,9 @@ if ($feedEnabled):
     $feedBase_e  = htmlspecialchars($feedBase, ENT_QUOTES, 'UTF-8');
     $feedTitle_e = htmlspecialchars($siteName ?? '', ENT_QUOTES, 'UTF-8');
 ?>
-<link rel="alternate" type="application/atom+xml" title="<?= $feedTitle_e ?> (Atom)" href="<?= $feedSiteUrl ?><?= $feedBase_e ?>/feed.atom.xml">
-<link rel="alternate" type="application/rss+xml"  title="<?= $feedTitle_e ?> (RSS)"  href="<?= $feedSiteUrl ?><?= $feedBase_e ?>/feed.rss.xml">
+<?php require_once CORE_PATH . '/FeedCompiler.php'; foreach (FeedCompiler::formats() as $feedFmt): $feedLabel = ['atom' => 'Atom', 'rss' => 'RSS', 'json' => 'JSON Feed'][$feedFmt]; ?>
+<link rel="alternate" type="<?= FeedCompiler::FORMATS[$feedFmt][1] ?>" title="<?= $feedTitle_e ?> (<?= $feedLabel ?>)" href="<?= $feedSiteUrl ?><?= $feedBase_e ?>/feed.<?= FeedCompiler::FORMATS[$feedFmt][0] ?>">
+<?php endforeach; ?>
 <?php endif; ?>
 <?php
 // hreflang output (only when there is a translation group; from posts.hreflang_cache)

@@ -25,7 +25,7 @@ class Schema
      * Must equal the highest migration in core/database/migrations, because db:status compares this
      * against the newest row in schema_migrations to detect code/DB drift.
      */
-    public const SCHEMA_VERSION = 'V001003000';
+    public const SCHEMA_VERSION = 'V001004000';
 
     /**
      * Version recorded for the "this came from the full schema" baseline row.

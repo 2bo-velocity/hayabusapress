@@ -1,7 +1,7 @@
 <?php
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
-$seoMeta    = '<title>#' . htmlspecialchars($tag['name'] . ' — ' . $siteName, ENT_QUOTES, 'UTF-8') . '</title>';
+$seoMeta    = SeoCompiler::buildListMeta('#' . $tag['name'], $canonical ?? '', $lang ?? '');
 $langPrefix = ($lang === $defaultLang) ? '' : "/{$lang}";
 ?>
 {% include 'header' %}

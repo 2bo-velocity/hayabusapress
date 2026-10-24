@@ -54,7 +54,7 @@ $__roleLabel    = ($user['id'] ?? null) === 0 ? 'Super User' : ucfirst((string)(
         <div>
             <label class="block text-sm font-medium mb-1.5">{@ biography @}</label>
             <textarea name="biography" rows="3"
-                      class="w-full px-4 py-2.5 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:border-emerald-500">{{{ $user['biography'] }}}</textarea>
+                      class="w-full px-4 py-2.5 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:border-emerald-500">{{ $user['biography'] }}</textarea>
         </div>
 
         <!-- Avatar -->

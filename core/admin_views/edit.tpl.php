@@ -23,11 +23,34 @@ $selTags   = $selected_tags ?? [];
         {@ save_success @}
     </div>
     {% endif %}
+    <?php if ($rawTrust['allowed'] && !$rawTrust['mayUseRaw']): ?>
+    <div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">
+        {@ raw_html_strip_warning @}
+    </div>
+    <?php endif; ?>
+    <?php if (!empty($_GET['card_missing']) && preg_match('/^[a-z0-9,-]+$/', (string)$_GET['card_missing'])): ?>
+    <div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">
+        <?= str_replace(':slugs', htmlspecialchars(str_replace(',', ', ', (string)$_GET['card_missing']), ENT_QUOTES, 'UTF-8'), '{@ card_missing @}') ?>
+    </div>
+    <?php endif; ?>
     {% if $_GET['sponsor_hint'] %}
     <div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">
         {@ sponsored_missing_hint @}
     </div>
     {% endif %}
+
+    <?php if (!empty($postTemplates)): ?>
+    <div class="mb-4 flex items-center gap-2 text-sm">
+        <label for="tplPick" class="text-xs text-slate-500">{@ template_start_from @}</label>
+        <select id="tplPick" class="text-sm px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white">
+            <option value="">—</option>
+            <?php foreach ($postTemplates as $pt): ?>
+            <option value="<?= (int)$pt['id'] ?>" <?= (int)($_GET['template'] ?? 0) === (int)$pt['id'] ? 'selected' : '' ?>><?= htmlspecialchars($pt['name'], ENT_QUOTES, 'UTF-8') ?></option>
+            <?php endforeach; ?>
+        </select>
+        <script>document.getElementById('tplPick').addEventListener('change', function () { if (this.value) location.href = '?template=' + encodeURIComponent(this.value); });</script>
+    </div>
+    <?php endif; ?>
 
     <!-- Title -->
     <div class="mb-4">
@@ -61,6 +84,11 @@ $selTags   = $selected_tags ?? [];
                 <button type="button" onclick="insertBouten()"
                         class="text-xs px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">{@ bouten_button @}</button>
                 <span class="text-xs text-slate-400">{@ ruby_hint @}</span>
+                <span class="flex-1"></span>
+                <button type="button" onclick="insertContainer('quote')" class="text-xs px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">{@ insert_quote @}</button>
+                <button type="button" onclick="insertContainer('box')" class="text-xs px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">{@ insert_box @}</button>
+                <button type="button" onclick="insertContainer('say')" class="text-xs px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">{@ insert_say @}</button>
+                <button type="button" onclick="insertContainer('card')" class="text-xs px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">{@ insert_card @}</button>
             </div>
             <!-- body character count (by code point, top-left) + a soft guide for the recommended range -->
             <div class="flex items-center gap-3 px-1 mb-1">
@@ -71,7 +99,7 @@ $selTags   = $selected_tags ?? [];
                       class="w-full h-96 px-4 py-3 border border-slate-200 dark:border-slate-700 rounded-2xl
                              dark:bg-slate-900 dark:text-white text-sm font-mono resize-y
                              focus:outline-none focus:ring-2 focus:border-emerald-500 focus:ring-emerald-500/20"
-                      placeholder="{@ markdown_placeholder @}">{{{ $post['content_markdown'] }}}</textarea>
+                      placeholder="{@ markdown_placeholder @}">{{ $post['content_markdown'] }}</textarea>
             <div id="previewArea"
                  class="hidden w-full min-h-96 px-4 py-3 border border-slate-200 dark:border-slate-700 rounded-2xl
                         dark:bg-slate-900 prose dark:prose-invert max-w-none overflow-auto hbp-content">
@@ -128,6 +156,36 @@ $selTags   = $selected_tags ?? [];
                         <option value="scheduled" {% if ($post['status'] ?? '') === 'scheduled' %}selected{% endif %}>{@ scheduled @}</option>
                     </select>
                 </div>
+                <?php if (!empty($publishSlots)): ?>
+                <!-- publishing slots (SEO settings): pick a day, then a slot; sets the status to scheduled -->
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">{@ publish_slots @}</label>
+                    <input type="date" id="slotDate" value="<?= htmlspecialchars((new DateTimeImmutable('now', new DateTimeZone(Env::get('APP_TIMEZONE', 'UTC'))))->format('Y-m-d'), ENT_QUOTES, 'UTF-8') ?>"
+                           class="w-full text-sm px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white mb-2">
+                    <div class="flex flex-wrap gap-1">
+                        <?php foreach ($publishSlots as $slot): ?>
+                        <button type="button" data-slot="<?= htmlspecialchars($slot, ENT_QUOTES, 'UTF-8') ?>" class="hbp-slot text-xs px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 font-mono"><?= htmlspecialchars($slot, ENT_QUOTES, 'UTF-8') ?></button>
+                        <?php endforeach; ?>
+                    </div>
+                    <?php if ($nextFreeSlot): ?>
+                    <button type="button" id="nextFreeSlot" data-at="<?= htmlspecialchars($nextFreeSlot, ENT_QUOTES, 'UTF-8') ?>" class="mt-2 text-xs text-emerald-600 hover:text-emerald-700">{@ publish_slot_next_free @} <?= htmlspecialchars(str_replace('T', ' ', $nextFreeSlot), ENT_QUOTES, 'UTF-8') ?></button>
+                    <?php endif; ?>
+                </div>
+                <script>
+                (function () {
+                    function setAt(v) {
+                        var f = document.querySelector('input[name="scheduled_at"]'), st = document.getElementById('statusSelect');
+                        if (!f || !st) return;
+                        f.value = v; st.value = 'scheduled'; if (typeof updateScheduleUI === 'function') updateScheduleUI();
+                    }
+                    document.querySelectorAll('.hbp-slot').forEach(function (b) {
+                        b.addEventListener('click', function () { var d = document.getElementById('slotDate').value; if (d) setAt(d + 'T' + b.dataset.slot); });
+                    });
+                    var n = document.getElementById('nextFreeSlot');
+                    if (n) n.addEventListener('click', function () { setAt(n.dataset.at); });
+                })();
+                </script>
+                <?php endif; ?>
                 <!-- scheduled-publish datetime (shown only when status=scheduled; entered in APP_TIMEZONE) -->
                 <?php
                 $schedLocal = '';
@@ -198,6 +256,19 @@ $selTags   = $selected_tags ?? [];
                     <label class="block text-xs font-medium text-slate-500 mb-1">{@ slug @}</label>
                     <input type="text" name="slug" value="{{ $post['slug'] }}"
                            class="w-full text-sm px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500" placeholder="url-slug">
+                    <?php if (!empty($redirects)): ?>
+                    <p class="text-xs text-slate-500 mt-2">{@ old_urls @}</p>
+                    <ul class="text-xs text-slate-500 space-y-1">
+                        <?php foreach ($redirects as $rd): ?>
+                        <li class="flex items-center gap-2">
+                            <span class="font-mono">/<?= htmlspecialchars($rd['type'] . '/' . $rd['old_slug'], ENT_QUOTES, 'UTF-8') ?></span>
+                            <button type="submit" formaction="/{{ $adminPath }}/post/redirect/delete" name="redirect_id" value="<?= (int)$rd['id'] ?>" formnovalidate
+                                    class="text-rose-400 hover:text-rose-600">{@ delete @}</button>
+                        </li>
+                        <?php endforeach; ?>
+                    </ul>
+                    <p class="text-xs text-slate-400">{@ old_urls_hint @}</p>
+                    <?php endif; ?>
                 </div>
             </div>
 
@@ -247,6 +318,12 @@ $selTags   = $selected_tags ?? [];
                     <input type="checkbox" name="is_sponsored" value="1" {% if $post['is_sponsored'] ?? false %}checked{% endif %}> {@ is_sponsored @}
                 </label>
                 <p class="text-xs text-slate-400">{@ is_sponsored_hint @}</p>
+                <?php if ($rawTrust['recorded']): ?>
+                <p class="text-xs text-slate-500">
+                    <span class="inline-block px-2 py-0.5 rounded-lg <?= $rawTrust['allowed'] ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600' : 'bg-slate-100 dark:bg-slate-800' ?>"><?= $rawTrust['allowed'] ? '{@ raw_html_badge_on @}' : '{@ raw_html_badge_off @}' ?></span>
+                    <?php /* the {@ @} text is already escaped; escape only the name */ ?><?= str_replace(':name', htmlspecialchars($rawTrust['saver'], ENT_QUOTES, 'UTF-8'), '{@ raw_html_saved_by @}') ?>
+                </p>
+                <?php endif; ?>
             </div>
 
             <!-- Translation group (hreflang linkage) -->
@@ -291,7 +368,58 @@ $selTags   = $selected_tags ?? [];
                     <label class="block text-xs text-slate-400 mb-1">{@ meta_description @}</label>
                     <textarea name="meta_description" rows="2"
                               class="w-full text-xs px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500"
-                              placeholder="{@ meta_desc_placeholder @}">{{{ $post['meta_description'] }}}</textarea>
+                              placeholder="{@ meta_desc_placeholder @}">{{ $post['meta_description'] }}</textarea>
+                </div>
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">{@ share_text @} <span id="shareCount" class="text-slate-400"></span></label>
+                    <textarea name="share_text" id="shareText" rows="3" maxlength="500"
+                              class="w-full text-xs px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">{{ $post['share_text'] ?? '' }}</textarea>
+                    <p class="text-xs text-slate-400 mt-1">{@ share_text_hint @}</p>
+                    <?php if (!empty($post['share_text_auto'])): ?>
+                    <p class="text-xs text-slate-500 mt-1">{@ share_text_generated @}<br><?= nl2br(htmlspecialchars((string)$post['share_text_auto'], ENT_QUOTES, 'UTF-8')) ?></p>
+                    <?php endif; ?>
+                    <p id="shareOver" class="hidden text-xs text-rose-600 mt-1">{@ share_text_over @}</p>
+                    <!-- X card preview (summary_large_image is 1.91:1; X crops the image to that box) -->
+                    <p class="text-xs text-slate-400 mt-3 mb-1">{@ x_card_preview @}</p>
+                    <div class="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden text-xs">
+                        <div id="xCardImg" class="bg-slate-100 dark:bg-slate-800" style="aspect-ratio:1.91/1;background-size:cover;background-position:center"></div>
+                        <div class="px-3 py-2">
+                            <p class="text-slate-400"><?= htmlspecialchars((string)parse_url(Env::get('SITE_URL', ''), PHP_URL_HOST), ENT_QUOTES, 'UTF-8') ?></p>
+                            <p id="xCardTitle" class="font-medium overflow-hidden" style="white-space:nowrap;text-overflow:ellipsis"></p>
+                            <p id="xCardDesc" class="text-slate-500" data-auto="{{ $post['meta_description_auto'] ?? '' }}"></p>
+                        </div>
+                    </div>
+                    <script>
+                    (function () {
+                        var t = document.getElementById('titleInput'), d = document.querySelector('textarea[name="meta_description"]'),
+                            img = document.getElementById('featuredImagePreview'), box = document.getElementById('xCardImg'),
+                            ct = document.getElementById('xCardTitle'), cd = document.getElementById('xCardDesc');
+                        function clip(s, n) { return s.length > n ? s.slice(0, n) + '…' : s; }
+                        function update() {
+                            ct.textContent = t ? t.value : '';
+                            cd.textContent = clip((d && d.value) || cd.dataset.auto || '', 100);
+                            var src = img && !img.classList.contains('hidden') ? img.getAttribute('src') : '';
+                            box.style.backgroundImage = src ? 'url("' + src.replace(/"/g, '%22') + '")' : 'none';
+                        }
+                        [t, d].forEach(function (el) { if (el) el.addEventListener('input', update); });
+                        if (img) new MutationObserver(update).observe(img, { attributes: true, attributeFilter: ['src', 'class'] });
+                        update();
+                    })();
+                    </script>
+                    <script>
+                    (function () {
+                        // X weighted count (see core/ShareText.php): weight 1 in these ranges, else 2; URLs 23; +24 for the appended link
+                        var light = [[0, 0x10FF], [0x2000, 0x200D], [0x2010, 0x201F], [0x2032, 0x2037]];
+                        function weight(s) {
+                            var w = 0, rest = s.replace(/https?:\/\/\S+/g, function () { w += 23; return ''; });
+                            for (var ch of rest) { var c = ch.codePointAt(0), l = false; for (var r of light) { if (c >= r[0] && c <= r[1]) { l = true; break; } } w += l ? 1 : 2; }
+                            return w;
+                        }
+                        var ta = document.getElementById('shareText'), out = document.getElementById('shareCount'), over = document.getElementById('shareOver');
+                        function update() { var w = ta.value === '' ? 0 : weight(ta.value) + 24; out.textContent = ta.value === '' ? '' : '(' + w + ' / 280)'; over.classList.toggle('hidden', w <= 280); }
+                        ta.addEventListener('input', update); update();
+                    })();
+                    </script>
                 </div>
                 <div>
                     <label class="block text-xs text-slate-400 mb-1">{@ meta_keywords @}</label>
@@ -395,6 +523,17 @@ function wrapSelection(before, after, fallback) {
 }
 function insertRuby()   { wrapSelection('｜', '《》', '漢字'); }
 function insertBouten() { wrapSelection('《《', '》》', '文字'); }
+// 囲み記法・カードを行単位で挿入（選択中の文章は中身になる）
+function insertContainer(kind) {
+    var open = {
+        quote: ':::quote {@ insert_quote_source @}|https://',
+        box:   ':::box summary {@ insert_box_title @}',
+        say:   ':::say speaker-slug'
+    };
+    // braces split so the template compiler leaves them alone
+    if (kind === 'card') { wrapSelection('\n{' + '{ card:', ' }' + '}\n', 'post-slug'); return; }
+    wrapSelection('\n' + open[kind] + '\n', '\n:::\n', '{@ insert_container_body @}');
+}
 
 function updateTypeUI() {
     var type = document.querySelector('input[name="type"]:checked').value;

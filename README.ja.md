@@ -50,6 +50,16 @@ WordPress の「重さ・セキュリティの緩さ・積み上がった技術�
 | **ボタン** | `[[button:ラベル\|URL\|補足]]` の1行で、補足文つきの誘導ボタンを出します。危険な URL スキームは出力しません。 |
 | **リンク管理（`/go/`）** | **管理画面 → リンク**で `別名 → https://…` を登録し、記事からは `/go/別名` にリンクします。コンパイル済み配列から 302 で転送し、DB もページキャッシュも通りません。転送先は登録済みの `https://` だけで、応答には `X-Robots-Tag: noindex, nofollow` を付け、生成される `robots.txt` も `/go/` を除外します。 |
 | **広告・PR 表記** | 記事ごとの「広告・プロモーションを含む」設定で、本文の冒頭に表記を入れ（文言は `SPONSORED_NOTICE_TEXT` で変更可）、外部リンクに `rel="sponsored"` を付けます。`/go/` へのリンクには常に `rel="sponsored nofollow"` が付きます。 |
+| **公開枠と予約画面** | SEO 設定に毎日の公開時刻（例：`07:00, 12:00, 21:00`）を登録すると、編集画面に枠のボタンと「次の空き枠」が出ます。**管理画面 → 予約**は予約・公開済みの記事を「日付 × 公開枠」のマス目に並べ、空き枠を強調します。管理画面だけで完結し、公開ページには何も足しません。 |
+| **タイトル・概要文・スラッグ** | ページタイトルの書式（`{title} \| {site}`）。概要文が空なら、保存時に本文から約120字の抜粋を作ります（`meta_description_auto`。目次と広告表記は除く）。スラッグが空なら、タイトル・日付と時刻（`20261024-0700`）・記事 ID（`p123`）から作ります。英数字の残らないタイトルは日付と時刻になります。 |
+| **構造化データ（JSON-LD）** | 記事に `BlogPosting` と `BreadcrumbList`、固定ページに `WebPage`、トップに `WebSite`。ページキャッシュを書くときに組み立てます。`application/ld+json` はデータブロックなので、CSP にハッシュは要りません。 |
+| **配信用フィード** | Atom/RSS に加えて JSON Feed 1.1（`/feed.json`）、さらに「フィードを出す」をオンにしたカテゴリ別のフィード（`/feeds/{lang}/category/{slug}.{atom.xml,rss.xml,json}`）。JSON の各記事は `_hbp.share_text` を持ちます。手入力の SNS 用文面か、保存時にタイトル・概要・カテゴリのハッシュタグから作った文面で、**X の重み付き文字数**（日本語 2・URL 23）でリンク分を残して収めます。 |
+| **スラッグ変更時の 301** | 公開済みの記事のスラッグを変えると旧スラッグを残し、`/post/{旧}` をコンパイル済みの配列から現在の URL へ 301 で返します（DB を引かず、キャッシュにも載せない）。連鎖は畳み、別の記事が同じスラッグを使えばそちらが優先です。 |
+| **記事テンプレート** | 新しい記事のひな形（タイトル・本文・カテゴリ・タグ・レイアウト・目次・広告表記。`{date}` は今日の日付）。使うと**写す**だけなので、あとでテンプレートを直しても既存の記事は変わりません。 |
+| **囲み・吹き出し・記事カード** | `:::quote 出典\|URL`・`:::box summary 見出し`・`:::say 話者` 〜 `:::` で、通常の Markdown を出典付き引用・囲み枠・吹き出し（話者は管理画面で登録）に包みます。`{{ card:slug }}` は別の公開記事へのカードを焼き込みます。外側はサニタイザの後に検証済みの引数から組み立て、中身は通常どおりサニタイズします。 |
+| **WebP と画像の寸法** | アップロードした JPEG/PNG には WebP 版（`{file}.webp`、小さくなる場合だけ）も作り、`<picture>` で出します。本文の画像には実寸の `width` / `height` を付け、読み込み中にレイアウトがずれません。WebP 版も `attachments` の1行なので、移動・削除・GC は元の画像と一緒です。`IMAGE_WEBP=off` で無効。 |
+| **条件付き GET** | キャッシュから返すページに `ETag` / `Last-Modified`（キャッシュファイルから作る。`stat` 1回）と `Cache-Control: no-cache` を付け、`If-None-Match` / `If-Modified-Since` が一致すれば **304** を返します。 |
+| **生 HTML の許可を記事ごとに記録** | 埋め込みがサニタイザを通るかどうかを記事ごとに記録します。基準は「最後に**本文**を保存した人が `post:raw_html` を持っていたか」です。メタ情報だけの保存は記録を引き継ぎ、`posts:recompile` もこれに従うので、権限の低い人がカテゴリを直しても管理者の埋め込みは消えません。意図して取り消すときは `posts:recompile --reassess` か、ロールを下げるときの「埋め込みも無効にする」を使います。 |
 | **アイキャッチ画像 / OGP** | `posts.featured_image` ＋ `featured_image_alt`。右ドロワーで設定。フォールバック連鎖（本文先頭画像 → サイトロゴ）を**保存時に解決**して焼き付け — 実行時の本文走査ゼロ。`og:image` を駆動。 |
 | **レスポンシブ・流動的タイポグラフィ** | テーマ指針：読者側は本文カラム ~720px・`clamp()` 16→18px、管理側はリキッド全幅・ラベル14px・**入力欄≥16px**（iOSズーム防止）。 |
 | **メディアの物理隔離** | 下書きメディアは `storage/upload/`（Web到達不可）に格納。公開時に `public/assets/articles/` へ atomic 移動、**非公開化で逆移動**。 |
@@ -60,12 +70,12 @@ WordPress の「重さ・セキュリティの緩さ・積み上がった技術�
 | **コメントのメール任意化** | コメントは名前＋本文のみ必須、**メール・ウェブサイトは任意**（`comments.author_email` は NULL 許容）。HBP は返信通知メールも外部 Gravatar も持たず、使えないメールを収集しない。コメント者アバターは**同梱の SVG シルエット**（`public/assets/site/avatar-default.svg`・`fill="currentColor"` でテーマ追従）＝外部リクエストゼロ。コンテンツ単位の受付可否はエディタ右ドロワーの `posts.allow_comment` トグル。 |
 | **コメント管理のフィルタ** | コメント管理画面をコンテンツ一覧と統一デザインに（PC=フィルタバー＋テーブル、スマホ=カード、ページネーション）。ステータス区分（件数バッジ付き）＋**投稿日時の期間**＋名前/メール/ウェブサイト（`LIKE`）＋紐づくコンテンツ（`post_id`・コンテンツ一覧から導線）で絞り込み。**本文は意図的に検索対象外**（長文＝索引非効率）。索引追加なし — `status`/期間は `idx_status_created`、`post_id` は `idx_comments_post`。一括操作なし・削除は確認必須。要 `comment:moderate`。 |
 | **スーパーユーザー** | 最高権限の管理者を `.env` のみで認証 — DBには一切保存しない。DB全消去でも締め出されない。 |
-| **ロールベースアクセス制御** | 静的RBACマトリクス（`permissions.php`・DBクエリゼロ）。4つのスタッフロール（Administrator / Editor / Author / Contributor）＋ Super User を、17の細粒度権限（記事・コメント・メディア・分類・ナビ・ブロック・リンク・メンテ・IP・プラグイン・テーマ・ユーザー・設定）にマッピング。 |
+| **ロールベースアクセス制御** | 静的RBACマトリクス（`permissions.php`・DBクエリゼロ）。4つのスタッフロール（Administrator / Editor / Author / Contributor）＋ Super User を、18の細粒度権限（記事・コメント・メディア・分類・ナビ・ブロック・テンプレート・リンク・メンテ・IP・プラグイン・テーマ・ユーザー・設定）にマッピング。 |
 | **ネイティブTOTP 2FA** | RFC 6238 準拠。リプレイ防止（`tfa_last_step`）、5回失敗でセッション破棄、time-step再利用検知。 |
 | **マニフェスト型プラグイン** | `manifest.json` でフックを宣言。フックレジストリは事前コンパイル＋優先度ソート済み。リクエストごとの全プラグインロードなし。`<head>` と `<body>` 末尾へ出す静的な HTML 断片はページキャッシュに焼き込まれ、実行時コストはゼロ。 |
 | **zip-slip安全インストーラ** | `PluginInstaller` が全ZIPエントリを検証し、シンボリックリンク＋zip爆弾を拒否、任意で Ed25519 署名を強制。 |
 | **デュアルIPブロックリスト** | `blocked_ips` テーブルが POST型スパムをブロック。`SITE_IP_DENYLIST` はコンパイル済み配列でページ閲覧をブロック — DBヒットゼロ。 |
-| **Atom 1.0 + RSS 2.0 フィード** | 言語別の事前コンパイルフィード（`feed.atom.xml`・`feed.rss.xml`）。記事公開時に生成 — 配信時DBゼロ。全 `<head>` に autodiscovery `<link>`。 |
+| **Atom 1.0 + RSS 2.0 + JSON Feed** | 言語別の事前コンパイルフィード（`feed.atom.xml`・`feed.rss.xml`・`feed.json`。`FEED_FORMAT` で選ぶ）。記事公開時に生成 — 配信時DBゼロ。全 `<head>` に autodiscovery `<link>`。 |
 | **予約公開** | `status='scheduled'` ＋ `published_at`（UTC）。擬似cron（既定・**FPC高速パスへの影響ゼロ**＝整数1回比較）、OS cron、手動 `/cron` エンドポイントで発火。`published_at` が投稿日時の単一の真実。 |
 | **サイトマップインデックス** | サイト規模が大きくなると `sitemaps/posts-N.xml`（5万URLチャンク）へ自動分割。 |
 | **ブラウザメンテナンス** | 管理画面 → メンテナンスページから sitemap / feeds / plugins / 全キャッシュをブラウザで再生成 — SSH不要（`system:init` 相当）。 |
@@ -150,6 +160,9 @@ php core/cli.php db:migrate
 # 4. 派生データを作り直し、全キャッシュを再生成
 php core/cli.php system:init && php core/cli.php plugins:rebuild
 ```
+
+**1.4.0**（`V001004000`）へ上げるときは、3 と 4 のあいだで `php core/cli.php posts:recompile --reassess` を
+1回実行します。各記事の本文で生 HTML を通すかどうかを（著者の現在のロールから）記録し、自動の概要文と SNS 用文面を作ります。
 
 > **手順4の中身はリリースごとに異なります。** スキーマ変更によっては、非正規化データを埋め直すまでサイトが正しく表示されません（よく使うのは `tags:reindex`＝`post_tags` の一覧キー、`counters:rebuild`＝`categories.post_count` / `tags.post_count`）。どれが必要かは各リリースのリリースノートに明記します。
 >
@@ -303,6 +316,9 @@ curl -o /dev/null -s -w "%{http_code}\n" https://example.com/storage/
 
 手順の詳細は `deploy/README-shared-hosting.md` を参照。
 
+Nginx では `deploy/nginx.sample.conf` がフィードのファイルを直接配信し、無ければ `index.php` に回します（Auto-Healing）。
+対象は `/feed.atom.xml`・`/feed.rss.xml`・`/feed.json`、それぞれの `/{lang}/…`、そして `/feeds/{lang}/category/` 以下のカテゴリ別フィードです。
+
 ---
 
 ## CLIリファレンス
@@ -326,14 +342,14 @@ curl -o /dev/null -s -w "%{http_code}\n" https://example.com/storage/
 | `lang:rebuild [locale]` | 指定ロケール（または全ロケール）のMUIビューキャッシュを削除し再焼き付けを強制 |
 | `assets:rebuild` | テーマCSS/JS編集後、全FPC＋ビューキャッシュをパージし CSP ハッシュを再計算 |
 | `authors:rebuild` | `authors.cache.php` を再生成し、影響を受ける記事FPCをパージ |
-| `posts:recompile` | 全記事で Markdown → HTML ＋ サニタイザを再実行（サニタイザ規則や `SPONSORED_NOTICE_TEXT` の変更後に使用） |
+| `posts:recompile [--reassess [--user=ID]]` | 全記事で Markdown → HTML ＋ サニタイザを、各記事に記録された生 HTML の許可で再実行（サニタイザ規則・`SPONSORED_NOTICE_TEXT`・話者・カードの参照先を変えた後に使用）。自動の概要文と SNS 用文面も作り直す。`--reassess` は先に、各本文を最後に保存した人の現在のロールから許可を付け直す（`--user=ID` で保存者を1人に絞る。`0` は Super User） |
 | `blocks:rebuild` | `blocks.cache.php`（再利用ブロック）を再コンパイルし、全FPCをパージ |
 | `links:rebuild` | `links.cache.php`（`/go/` の別名表）を再コンパイル |
 | `media:gc [--days=N]` | `attachments` のどの行も参照しておらず N 日以上古い `storage/upload/` の孤児ドラフトメディアを回収（既定7日）。`{ab}/{cd}/` シャードを再帰走査 |
 | `media:reshard [--dry-run]` | 既存のフラット配置を `{ab}/{cd}/` 2階層へ移行：ファイル移動＋本文/アイキャッチの公開URLをフラット→シャードへ書換し、検索インデックス・一覧FPC・サイトマップ・フィードを再生成。冪等 |
 | `cache:purge-category {id}` | あるカテゴリの全記事FPCをパージ（精密クリーンアップ） |
 | `config:rebuild` | `env.cache.php` を明示的に再生成 |
-| `feed:rebuild` | 全言語の Atom/RSS フィードを再生成（`FEED_ENABLED=true`） |
+| `feed:rebuild` | 全言語と、フィードを有効にした全カテゴリのフィードを再生成（`FEED_ENABLED=true`） |
 | `posts:publish-due` | `published_at` が到来した `scheduled` 記事を昇格（cron / 手動トリガー） |
 | `schedule:recompile` | `next_schedule.php`（次の擬似cron発火時刻）を再計算 |
 
@@ -372,7 +388,9 @@ curl -o /dev/null -s -w "%{http_code}\n" https://example.com/storage/
 | CSP ハッシュ | `assets:rebuild` | `cache/security_headers.cache.php` |
 | テーマ CSS/JS | ビューコンパイル | ビューキャッシュ HTML にインライン化 |
 | サイトマップ | 記事公開 / 非公開 | `public/sitemap.xml`（＋`sitemaps/`） |
-| フィード（Atom/RSS） | 記事公開 / 非公開 | `public/feed.atom.xml`、`public/{lang}/feed.rss.xml` |
+| フィード（Atom/RSS/JSON） | 記事公開 / 非公開、カテゴリ保存 | `public/feed.{atom.xml,rss.xml,json}`、`public/{lang}/…`、`public/feeds/{lang}/category/{slug}.*` |
+| 概要文の抜粋 ＋ SNS 用文面 | 記事保存 | `posts.meta_description_auto`、`posts.share_text_auto` |
+| スラッグの転送表 | 記事保存 / ゴミ箱 / 復元 / 削除 | `cache/redirects.cache.php` |
 | 次回スケジュール発火時刻 | 記事保存 / publish-due | `cache/next_schedule.php`（整数1個） |
 
 ### オンデマンドFPC
@@ -385,6 +403,10 @@ GET /post/hello-world
 ```
 
 FPC ファイル命名：`{lang}_{type}_{slug}.html` · ページネーション：`{lang}_home_p2.html`
+
+キャッシュヒット時はキャッシュファイルから作った `ETag` / `Last-Modified` と `Cache-Control: no-cache` も送るので、
+ブラウザやクローラーは問い合わせ直し、ページが変わっていなければ本文なしの **304** を受け取ります。パージ（編集）で
+ファイルが作り直されると、値も変わります。
 
 ### ルーター：O(1) パターンマッチング
 
@@ -450,6 +472,19 @@ SCHEDULE_MODE=manual           — 外部モニタが GET /cron を叩く（例�
 
 予約記事が保存または発火すると、`Scheduler::recompileNext()` が次の発火タイムスタンプを `cache/next_schedule.php` に焼き付け — ホットパスは整数1回比較のままです。
 
+公開枠どおり（毎時ちょうどなど）に公開したいなら、`SCHEDULE_MODE=cron` にして OS の cron で毎分実行してください。疑似 cron は次のページ閲覧で動くので、アクセスの少ない朝は遅れることがあります。
+
+### フィード
+
+```ini
+FEED_ENABLED=true
+FEED_FORMAT=both     # both (= atom,rss) | all (= atom,rss,json) | atom | rss | json、またはカンマ区切り
+```
+
+`json` は JSON Feed 1.1（`/feed.json`）です。各記事は `_hbp` 拡張（`share_text`・`category`・`hashtags`）を持つので、
+新着を他所へ投稿する自動化がそのまま文面を使えます。**管理画面 → カテゴリ**で「このカテゴリのフィードを出す」をオンにすると
+`/feeds/{lang}/category/{slug}.{atom.xml,rss.xml,json}` も出ます。カテゴリのハッシュタグは、その記事の自動の SNS 用文面に付きます。
+
 ---
 
 ## ロールと権限
@@ -481,7 +516,8 @@ HBP は `core/permissions.php` に定義し `core/Gate.php` で強制する**静
 | `media:manage` | メディアのアップロード / 削除 | ✅ | ✅ | ✅ (own) | ❌ |
 | `taxonomy:manage` | カテゴリ＆タグの作成 / 編集 / 削除 | ✅ | ✅ | ❌ | ❌ |
 | `nav:manage` | ナビメニュー＆ウィジェットの編集（生 HTML ウィジェットは `post:raw_html` も必要） | ✅ | ❌ | ❌ | ❌ |
-| `blocks:manage` | 再利用ブロックの作成・編集・削除 | ✅ | ❌ | ❌ | ❌ |
+| `blocks:manage` | 再利用ブロックと吹き出しの話者の作成・編集・削除 | ✅ | ❌ | ❌ | ❌ |
+| `templates:manage` | 記事テンプレートの作成・編集・削除 | ✅ | ✅ | ❌ | ❌ |
 | `links:manage` | `/go/` リンクの管理 | ✅ | ❌ | ❌ | ❌ |
 | `maintenance:run` | キャッシュ/sitemap/feeds の再構築（管理画面 → メンテナンス） | ✅ | ❌ | ❌ | ❌ |
 | `ip:manage` | 管理許可リスト＆公開ブロックリスト（A/B系）の管理 | ✅ | ❌ | ❌ | ❌ |
@@ -496,6 +532,8 @@ HBP は `core/permissions.php` に定義し `core/Gate.php` で強制する**静
 - **所有権。** `✅ (own)` 権限は `posts.user_id`（およびメディアは attachments の所有権）で所有を解決します。Super User のコンテンツは `user_id = NULL`（id `0`）。
 - **予約は公開。** 未来の `published_at` の予約（`status='scheduled'`）には `post:publish` が必要で、専用権限はありません。したがって Contributor は予約できません。
 - **Contributor のワークフロー。** `post:publish` が無いため Contributor の記事は `draft` のまま。Editor/Administrator がレビューして公開します。
+- **生 HTML の許可は記事ごとに記録する。** `post:raw_html` は記事の本文を保存したときに判定し、結果を記事に保存します（`raw_html_allowed`・`content_saved_by`）。本文を変えない保存は記録を引き継ぎ、`posts:recompile` も記録を使います。権限を失っても既存の記事はそのままで、取り消すときは **管理画面 → ユーザー**でロールを変える際に「このユーザーが保存した記事の埋め込みも無効にする」を選ぶか、`posts:recompile --reassess --user=ID` を実行します。
+- **予約画面は全員の記事を並べる**ので、**管理画面 → 予約**には `post:edit_other` が必要。
 - **ブラウザからのメンテナンス。** **管理画面 → メンテナンス**ページ（SSH不要のキャッシュ再構築）には `maintenance:run` が必要。
 - **Super User はロール行ではない。** `.env` で認証され、マトリクスを完全にバイパスします。`users` テーブルには絶対に作成しないこと。
 
@@ -541,10 +579,15 @@ hayabusapress/
 │   ├── SidebarCompiler.php     # ウィジェットHTMLコンパイラ（6エリア・言語別）
 │   ├── BlockCompiler.php       # 再利用ブロック → blocks.cache.php（FPC 書き込み時に展開）
 │   ├── LinkCompiler.php        # /go/{alias} → links.cache.php（DBを引かずに 302）
+│   ├── RedirectCompiler.php    # 旧スラッグ → redirects.cache.php（DBを引かずに 301）
+│   ├── SpeakerCompiler.php     # :::say の話者 → speakers.cache.php
+│   ├── PostCompiler.php        # 記事ごとに記録した生 HTML の許可での再生成・SNS 用文面
+│   ├── ShareText.php           # X の重み付き文字数に収める SNS 用文面
+│   ├── PublishSlots.php        # 毎日の公開枠・次の空き枠・週間の予約マス目
 │   ├── CommentCompiler.php     # 承認済みコメントキャッシュ + FPC + サイドバー同期
 │   ├── SeoCompiler.php         # SEO/解析タグコンパイラ
 │   ├── SiteFileCompiler.php    # sitemap.xml（インデックス + 分割）/ robots.txt 生成
-│   ├── FeedCompiler.php        # Atom 1.0 / RSS 2.0 言語別フィード生成
+│   ├── FeedCompiler.php        # Atom 1.0 / RSS 2.0 / JSON Feed 1.1 を言語別・カテゴリ別に生成
 │   ├── Scheduler.php           # 予約公開：runDue + next_schedule.php
 │   ├── CategoryCompiler.php    # カテゴリメタデータキャッシュ
 │   ├── TagCompiler.php         # タグメタデータキャッシュ
@@ -558,7 +601,7 @@ hayabusapress/
 │   ├── Installer.php           # 組み込みインストーラ（隠蔽型・.env 不在時のみ起動）
 │   ├── AdminPostController.php # 記事保存オーケストレータ
 │   ├── AdminUserController.php # スタッフ + 2FA 管理
-│   ├── permissions.php         # 静的 RBAC マトリクス（17権限 × 4ロール）
+│   ├── permissions.php         # 静的 RBAC マトリクス（18権限 × 4ロール）
 │   ├── cli.php                 # CLI エントリポイント
 │   │
 │   ├── controllers/
@@ -589,6 +632,9 @@ hayabusapress/
 │   │   ├── sidebar.tpl.php
 │   │   ├── blocks.tpl.php
 │   │   ├── links.tpl.php
+│   │   ├── schedule.tpl.php        # 日付 × 公開枠
+│   │   ├── templates.tpl.php       # 記事テンプレート
+│   │   ├── speakers.tpl.php        # 吹き出しの話者
 │   │   ├── categories.tpl.php
 │   │   ├── tags.tpl.php
 │   │   ├── plugins.tpl.php
@@ -642,6 +688,8 @@ hayabusapress/
 │       ├── widget_comments_{lang}.cache.php
 │       ├── blocks.cache.php        # 再利用ブロック
 │       ├── links.cache.php         # /go/ の別名表
+│       ├── redirects.cache.php     # 旧スラッグ → 現在の URL（301）
+│       ├── speakers.cache.php      # :::say の話者
 │       ├── plugin_snippets.cache.php
 │       ├── pages/                  # FPC: {lang}_{type}_{slug}.html（+ _p{n} 派生）
 │       │   └── .locks/             # スタンピードロックファイル
@@ -654,6 +702,8 @@ hayabusapress/
     ├── sitemap.xml                 # サイトマップインデックス（小規模なら単一ファイル）
     ├── sitemaps/                   # 分割サブサイトマップ（posts-1.xml, pages.xml, …）
     ├── robots.txt
+    ├── feed.atom.xml · feed.rss.xml · feed.json   # 既定言語のフィード（他言語は {lang}/ 以下）
+    ├── feeds/{lang}/category/      # フィードを有効にしたカテゴリのフィード
     ├── .htaccess                   # Apache リライト規則（クリーンURL）
     ├── comment_post.php
     ├── assets/
@@ -693,17 +743,18 @@ HBP はスキーマ状態を `schema_migrations` テーブルで追跡し、シ�
 -- schema.{driver}.sql の末尾
 INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
   VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>),
-         ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>);
+         ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>),
+         ('V001004000', 'seo_feeds_templates',               'BASELINE', <now>);
 ```
 
 - `checksum = 'BASELINE'` は「この行は差分マイグレーションではなくフルスキーマ由来」を示す番兵値 — checksum 検証は `BASELINE` 行をスキップします。
-- `db:install` はこの INSERT を**含めて**フルスキーマを適用するため、新規DBは即座に現行版（`V001003000`）= 完全に最新と報告します。`db:migrate` は正しく**未適用なし**を返します（既存カラムを再 `ADD` しようとして事故ることがない）。
+- `db:install` はこの INSERT を**含めて**フルスキーマを適用するため、新規DBは即座に現行版（`V001004000`）= 完全に最新と報告します。`db:migrate` は正しく**未適用なし**を返します（既存カラムを再 `ADD` しようとして事故ることがない）。
 
 #### 3つの保証
 
 | 仕組み | 役割 |
 |---|---|
-| 各フルスキーマの **baseline INSERT** | 新規DBが自身の版（`V001000000`）をスキーマと原子的に記録 — 「不明な版」の隙間が生じない。 |
+| 各フルスキーマの **baseline INSERT** | 新規DBが自身の版（下限 `V001000000` と畳み込み済みの差分すべて）をスキーマと原子的に記録 — 「不明な版」の隙間が生じない。 |
 | **`SCHEMA_VERSION` 定数**（`core/Schema.php`） | *コード*が期待する版。起動時/CLI で最新適用行と比較し、不一致（コード vs DB ドリフト）を警告。 |
 | **`db:status` レポート** | DBの版・コードが期待する版・ドライバ・未適用マイグレーション（実行すべきコマンド付き）を表示 — 「どこまで移行すればよいか」が一目で分かる。 |
 
@@ -717,6 +768,7 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 版 | マイグレーション | 内容 |
 |---|---|---|
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`、`posts.layout` / `show_toc` / `is_sponsored`、新テーブル `blocks` と `links` |
+| 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`、`categories.hashtags` / `feed_enabled`、新テーブル `post_templates` · `slug_redirects` · `speakers`。適用後に `posts:recompile --reassess` を1回 |
 
 > これは HBP の憲法の範囲内に収まります：純PHP + PDO、生SQL、外部ツールゼロ（Flyway/Liquibase なし）。新規インストールの正規経路は常にフルスキーマファイルです。
 
@@ -725,7 +777,7 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | # | テーブル | 用途 |
 |---|---|---|
 | 1 | `users` | スタッフアカウント（Super User は `.env` のみ） |
-| 2 | `categories` | カテゴリ（`type` = post \| page、`lang` カラム） |
+| 2 | `categories` | カテゴリ（`type` = post \| page、`lang` カラム、SNS 用文面の `hashtags`、カテゴリ別フィードの `feed_enabled`） |
 | 3 | `tags` | タグ（`type` = post \| page、`lang` カラム） |
 | 4 | `posts` | 全コンテンツ — 記事と固定ページを `type` で統合 |
 | 5 | `post_tags` | タグ↔記事 中間テーブル |
@@ -739,6 +791,9 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 13 | `schema_migrations` | checksum 検証付きマイグレーション追跡 |
 | 14 | `blocks` | 再利用ブロック（`slug` ＋ `lang` で一意・本文は Markdown） |
 | 15 | `links` | リンク管理（`alias` で一意 → `target_url`） |
+| 16 | `post_templates` | 新しい記事のひな形（記事へ写すだけで、つながりは持たない） |
+| 17 | `slug_redirects` | 公開済み記事の旧スラッグ → `post_id`。301 で返す |
+| 18 | `speakers` | `:::say` 吹き出しの話者（`slug` で一意・名前・画像・左右） |
 
 ### `posts` テーブルの主要カラム
 
@@ -757,6 +812,9 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | `layout` | テーマのレイアウトID（`NULL` ＝テーマの既定。未知のIDも既定に戻る） |
 | `show_toc` | 保存時に目次を入れる |
 | `is_sponsored` | 広告・PR 表記を出し、外部リンクを `rel="sponsored"` にする |
+| `meta_description_auto` | 保存時に本文から作る抜粋。`meta_description` が空のときに使う |
+| `share_text` / `share_text_auto` | 手入力の SNS 用文面 / 保存時に作る SNS 用文面（JSON Feed の `_hbp.share_text`） |
+| `raw_html_allowed` / `content_saved_by` | 最後に本文を保存した人が `post:raw_html` を持っていたか、それが誰か（`0` は Super User）。再生成はロールではなくこれを使う |
 | `user_id` | `NULL` = Super User。`ON DELETE RESTRICT` — スタッフ削除前に再割り当てが必要 |
 
 > インデックス `idx_posts_schedule (status, published_at)` が `WHERE status='scheduled' AND published_at <= NOW()` の検索を駆動。全一覧インデックスは `published_at DESC` でソート。
@@ -785,7 +843,7 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 下書きメディア漏洩 | `storage/upload/` — Webサーバーが全拒否、PHP仲介配信のみ。アップロードも同じ隔離 ＋ `media:manage` ゲートに従う。**非公開化でメディアを `storage/upload/` へ逆移動**し、非公開記事のメディアが Web到達不可になる |
 | `.env` 漏洩（共有レンタル） | 方式B（本体を公開ルート外）/ 方式A（`.htaccess`）＋ bootstrap 自己防衛 ＋ インストーラ自己診断 |
 | XML-RPC 攻撃 | ファイルが存在しない — 一行も書いていない |
-| 権限昇格 | 静的 RBAC（`Gate::can()`・`permissions.php`） — 17権限 × 4ロール；所有権スコープのチェック；Super User は `.env` のみ |
+| 権限昇格 | 静的 RBAC（`Gate::can()`・`permissions.php`） — 18権限 × 4ロール；所有権スコープのチェック；Super User は `.env` のみ |
 | Super User の DB 露出 | Super User は `.env` のみ；DB侵害でルート認証情報は得られない |
 
 ### コンテンツセキュリティポリシー（CSP）
@@ -939,6 +997,19 @@ HBP は独自の軽量テンプレート構文をプレーンPHPにコンパイ�
 | `{% include 'name' %}` | `View::render('name', get_defined_vars())` |
 | `{# inline_css 'file.css' #}` | `<style>` ＋ ミニファイ済みCSS |
 | `{# inline_js 'file.js' #}` | `<script>` ＋ ミニファイ済みJS |
+
+### Markdown の拡張記法（保存時に解決）
+
+| 1行で書く | 結果 |
+|---|---|
+| `{{ block:slug }}` | 再利用ブロック。ページキャッシュを書くときに展開 |
+| `[[button:ラベル\|URL\|補足]]` | ボタン（補足は上に小さく表示） |
+| `{{ card:slug }}` | 同じ言語の公開記事へのカード（焼き込み。見つからないスラッグは編集画面で知らせる） |
+| `:::quote 出典\|URL` 〜 `:::` | `<blockquote cite>` と出典の `<figcaption>` を持つ `<figure>` |
+| `:::box note\|summary\|warning\|conclusion 見出し` 〜 `:::` | 見出し付きの囲み枠（それ以外の種類は `note`） |
+| `:::say 話者 [left\|right]` 〜 `:::` | **管理画面 → 話者**で登録した話者の吹き出し |
+
+囲みは入れ子にできません（最初の `:::` 行で閉じます）。どれも編集画面のツールバーから挿入できます。
 
 `{@ key @}` の MUI システムは、`ViewCompiler::compile()` 時に言語文字列をコンパイル済みPHPキャッシュへ直接焼き込みます。レンダ時にはテンプレートは既に翻訳済み — 配列ルックアップも関数呼び出しもありません。
 

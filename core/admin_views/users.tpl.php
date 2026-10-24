@@ -12,6 +12,7 @@
 
 {% if ($_GET['deleted'] ?? '') === '1' %}<div class="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 text-sm">{@ user_deleted_ok @}</div>{% endif %}
 {% if $_GET['saved'] %}<div class="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 text-sm">{@ save_success @}</div>{% endif %}
+<?php if ((int)($_GET['revoked'] ?? 0) > 0): ?><div class="mb-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-900 text-slate-600 text-sm"><?= str_replace(':count', (string)(int)$_GET['revoked'], '{@ raw_html_revoked @}') ?></div><?php endif; ?>
 {% if $_GET['msg'] %}<div class="mb-4 p-3 rounded-xl bg-slate-50 dark:bg-slate-900 text-slate-600 text-sm">{{ $_GET['msg'] }}</div>{% endif %}
 {% if $_GET['error'] %}<div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 text-sm">{{ $_GET['error'] }}</div>{% endif %}
 
@@ -31,7 +32,23 @@
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-900/50">
                 <td class="px-4 py-3 font-medium">{{ $user['name'] }}</td>
                 <td class="px-4 py-3 text-slate-500">{{ $user['email'] }}</td>
-                <td class="px-4 py-3 text-slate-500">{{ $user['role'] }}</td>
+                <td class="px-4 py-3 text-slate-500">
+                    <?php if ((int)$user['id'] !== (int)$authUser['id']): ?>
+                    <form method="post" action="/{{ $adminPath }}/user/role" class="space-y-1">
+                        {{{ Security::csrfField() }}}
+                        <input type="hidden" name="id" value="{{ $user['id'] }}">
+                        <select name="role" aria-label="{@ role_change @}" class="text-xs px-2 py-1 border border-slate-200 dark:border-slate-700 rounded-lg dark:bg-slate-900 dark:text-white">
+                            <?php foreach (['administrator' => '{@ role_administrator @}', 'editor' => '{@ role_editor @}', 'author' => '{@ role_author @}', 'contributor' => '{@ role_contributor @}'] as $rk => $rl): ?>
+                            <option value="<?= $rk ?>" <?= $user['role'] === $rk ? 'selected' : '' ?>><?= $rl ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="revoke_raw_html" value="1" checked> {@ role_revoke_raw_html @}</label>
+                        <button type="submit" class="text-xs text-emerald-600 hover:text-emerald-700">{@ role_change @}</button>
+                    </form>
+                    <?php else: ?>
+                    {{ $user['role'] }}
+                    <?php endif; ?>
+                </td>
                 <td class="px-4 py-3">
                     {% if $user['two_factor_secret'] %}
                     <span class="text-emerald-500 text-xs">ON</span>

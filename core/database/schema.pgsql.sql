@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
--- HayabusaPress (HBP) - PostgreSQL 13-16 Schema (HBP 1.3.0 / V001003000)
+-- HayabusaPress (HBP) - PostgreSQL 13-16 Schema (HBP 1.4.0 / V001004000)
 --
 -- The complete, current form of the schema, used for new installs. The schema_migrations INSERT at
 -- the end of this file stamps the same version as SCHEMA_VERSION in core/Schema.php, so this file is
@@ -13,6 +13,8 @@
 --   2. Denormalized listing keys on post_tags (type/lang/status/published_at + idx_post_tags_list)
 --   3. categories.post_count / tags.post_count counter columns
 --   4. Widget settings, theme layouts, reusable blocks and managed links (V001003000)
+--   5. Auto descriptions, share text, raw-HTML provenance, category feeds, post templates, slug
+--      redirects and speakers (V001004000)
 --
 -- [IMPORTANT - CHARACTER ENCODING] This schema assumes a database whose encoding is UTF8.
 --   A PostgreSQL database's encoding is fixed at CREATE DATABASE time and cannot be changed
@@ -51,6 +53,8 @@ CREATE TABLE IF NOT EXISTS categories (
   lang VARCHAR(5)   NOT NULL DEFAULT 'en',
   slug VARCHAR(255) NOT NULL,
   name VARCHAR(255) NOT NULL,
+  hashtags     VARCHAR(255) NULL,                   -- Space-separated hashtags for share text
+  feed_enabled BOOLEAN      NOT NULL DEFAULT FALSE, -- Publish /category/{slug}/feed.*
   post_count INT NOT NULL DEFAULT 0,   -- Number of published posts. Moved by deltas in core/Counters.php
   CONSTRAINT uk_categories_type_lang_slug UNIQUE (type, lang, slug)
 );
@@ -87,10 +91,15 @@ CREATE TABLE IF NOT EXISTS posts (
   show_share           BOOLEAN      NOT NULL DEFAULT TRUE,
   meta_description     VARCHAR(255) NULL,
   meta_keywords        VARCHAR(255) NULL,
+  meta_description_auto VARCHAR(255) NULL,       -- Excerpt baked on save; used when meta_description is empty
+  share_text           VARCHAR(500) NULL,        -- Social-post text typed by the editor. NULL = share_text_auto
+  share_text_auto      TEXT         NULL,        -- Social-post text generated on save
   user_id              INT          NULL REFERENCES users(id) ON DELETE RESTRICT,
   show_author          BOOLEAN      NOT NULL DEFAULT TRUE,
   show_toc             BOOLEAN      NOT NULL DEFAULT FALSE,  -- Bake a table of contents on save
   is_sponsored         BOOLEAN      NOT NULL DEFAULT FALSE,  -- Sponsored-content notice + rel=sponsored on outbound links
+  raw_html_allowed     BOOLEAN      NOT NULL DEFAULT FALSE,  -- Last body save was by a holder of post:raw_html
+  content_saved_by     INT          NULL,        -- Who last saved the body. 0 = Super User. No FK on purpose
   page_template        VARCHAR(50)  NULL,
   layout               VARCHAR(50)  NULL,        -- Theme layout ID. NULL = default
   trans_group          VARCHAR(36)  NULL,
@@ -247,6 +256,53 @@ CREATE TABLE IF NOT EXISTS links (
 );
 
 -- ============================================================
+-- post_templates (starting points for new posts; copied, never linked)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS post_templates (
+  id           INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name         VARCHAR(255) NOT NULL,                 -- Admin-only label
+  type         VARCHAR(10)  NOT NULL DEFAULT 'post',  -- post|page
+  lang         VARCHAR(5)   NOT NULL DEFAULT 'en',
+  title        VARCHAR(255) NOT NULL DEFAULT '',      -- {date} is replaced
+  body         TEXT         NOT NULL,                 -- Markdown; {date} is replaced
+  category_id  INT          NULL REFERENCES categories (id) ON DELETE SET NULL,
+  tags         TEXT         NULL,                     -- Comma-separated tag names
+  layout       VARCHAR(50)  NULL,
+  show_toc     BOOLEAN      NOT NULL DEFAULT FALSE,
+  is_sponsored BOOLEAN      NOT NULL DEFAULT FALSE,
+  created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- slug_redirects (old slugs of published posts, served as 301)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS slug_redirects (
+  id         INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  type       VARCHAR(10)  NOT NULL,
+  lang       VARCHAR(5)   NOT NULL,
+  old_slug   VARCHAR(255) NOT NULL,
+  post_id    INT          NOT NULL REFERENCES posts (id) ON DELETE CASCADE,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uk_slug_redirects_old UNIQUE (type, lang, old_slug)
+);
+CREATE INDEX IF NOT EXISTS idx_slug_redirects_post ON slug_redirects (post_id);
+
+-- ============================================================
+-- speakers (people shown in :::say speech bubbles)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS speakers (
+  id         INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  slug       VARCHAR(64)  NOT NULL,                  -- [a-z0-9-]; written as :::say slug
+  name       VARCHAR(255) NOT NULL,
+  avatar     VARCHAR(255) NULL,                      -- Image URL path
+  side       VARCHAR(5)   NOT NULL DEFAULT 'left',   -- left|right
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uk_speakers_slug UNIQUE (slug)
+);
+
+-- ============================================================
 -- auth_throttle (rate limiting for login and 2FA)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS auth_throttle (
@@ -343,5 +399,6 @@ INSERT INTO navigation_menus (location, title, url, sort_order)
 -- ============================================================
 INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES
   ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', CURRENT_TIMESTAMP),
-  ('V001003000', 'widgets_layouts_links',             'BASELINE', CURRENT_TIMESTAMP)
+  ('V001003000', 'widgets_layouts_links',             'BASELINE', CURRENT_TIMESTAMP),
+  ('V001004000', 'seo_feeds_templates',               'BASELINE', CURRENT_TIMESTAMP)
   ON CONFLICT (version) DO NOTHING;

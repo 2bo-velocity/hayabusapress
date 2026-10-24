@@ -15,6 +15,7 @@
 | 版 | ファイル | 変更内容 | 適用後の作業 |
 |---|---|---|---|
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`、`posts.layout` / `show_toc` / `is_sponsored`、新テーブル `blocks` と `links` | 不要。追加列の既定値はすべて 1.0.0 と同じ表示になる |
+| 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`、`categories.hashtags` / `feed_enabled`、新テーブル `post_templates` · `slug_redirects` · `speakers` | `php core/cli.php posts:recompile --reassess` を1回実行する。各記事の本文で生 HTML を通すかどうかを、著者の現在のロールから記録する |
 
 1.0.0 自体に差分ファイルは無い。1.0.0 は baseline（`V001000000`）であり、上の差分はそのスキーマを起点に前進させる。
 

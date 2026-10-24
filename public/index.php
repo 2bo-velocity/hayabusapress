@@ -201,9 +201,14 @@ if ($path === '/' || preg_match('#^/page/(\d{1,4})$#', $path, $m)) {
     // the search page is static (client-side search). Baked into FPC and served.
     $key     = $lang . '_search';
     $resolve = ['kind' => 'search', 'lang' => $lang];
-} elseif (preg_match('#^/feed\.(atom|rss)\.xml$#', $path, $m)) {
+} elseif (preg_match('#^/feed\.(atom\.xml|rss\.xml|json)$#', $path, $m)) {
     // serve precompiled feeds via readfile (with Auto-Healing)
-    handleFeedFile($lang, $m[1], $cfg['default']);
+    handleFeedFile($lang, explode('.', $m[1])[0], $cfg['default']);
+    exit;
+} elseif ($path === $uri
+    && preg_match('#^/feeds/([a-z]{2,5})/category/([a-z0-9][a-z0-9-]{0,199})\.(atom\.xml|rss\.xml|json)$#', $path, $m)) {
+    // per-category feeds (FeedCompiler::CATEGORY_DIR); the language is in the path itself
+    handleCategoryFeedFile($m[1], $m[2], explode('.', $m[3])[0]);
     exit;
 } elseif ($path === '/feed') {
     // Legacy URL backward compat: 301 redirect to /feed.atom.xml
@@ -234,7 +239,9 @@ if ($key !== null && empty($_GET)) {
     $cacheFile = CacheManager::pagePath($key);
     if (is_file($cacheFile)) {
         SecurityHeaderCompiler::emit('frontend');
-        readfile($cacheFile);
+        if (!CacheManager::sendValidators($cacheFile)) {
+            readfile($cacheFile);
+        }
         exit;
     }
 }
@@ -301,6 +308,13 @@ function handleDetail(array $resolve, array $common, ?string $fpcKey): void
     );
 
     if (!$post) {
+        // An old slug of a published post: 301 to where it lives now (compiled map, no DB)
+        require_once CORE_PATH . '/RedirectCompiler.php';
+        $to = RedirectCompiler::lookup($type, $lang, $slug);
+        if ($to !== null) {
+            header('Location: ' . rtrim((string)($common['siteUrl'] ?? ''), '/') . $to, true, 301);
+            exit;
+        }
         handle404($common);
         return;
     }
@@ -536,44 +550,54 @@ function handleSearch(array $resolve, array $common, ?string $fpcKey, int $pageS
  */
 function handleFeedFile(string $lang, string $format, string $defaultLang): void
 {
-    // FEED_ENABLED check
-    if (!Env::bool('FEED_ENABLED', true)) {
-        http_response_code(404);
-        exit;
-    }
+    require_once CORE_PATH . '/FeedCompiler.php';
 
-    // FEED_FORMAT check (404 for formats other than the configured one)
-    $feedFormat = Env::get('FEED_FORMAT', 'both');
-    if ($feedFormat === 'atom' && $format === 'rss') {
-        http_response_code(404);
-        exit;
-    }
-    if ($feedFormat === 'rss' && $format === 'atom') {
+    // FEED_ENABLED / FEED_FORMAT check (404 for formats that are not generated)
+    if (!Env::bool('FEED_ENABLED', true) || !in_array($format, FeedCompiler::formats(), true)) {
         http_response_code(404);
         exit;
     }
 
     // Determine the physical file path
     $feedDir  = ($lang === $defaultLang) ? PUBLIC_PATH : PUBLIC_PATH . "/{$lang}";
-    $filePath = "{$feedDir}/feed.{$format}.xml";
+    $filePath = "{$feedDir}/feed." . FeedCompiler::FORMATS[$format][0];
 
     // Auto-Healing: if the file does not exist, generate it with FeedCompiler
     if (!is_file($filePath)) {
-        $feedCompilerPath = CORE_PATH . '/FeedCompiler.php';
-        if (file_exists($feedCompilerPath)) {
-            require_once $feedCompilerPath;
-            require_once CORE_PATH . '/DB.php';
+        FeedCompiler::compile($lang);
+    }
+    serveFeedFile($filePath, $format);
+}
+
+/** A category feed (only categories with feed_enabled have one). */
+function handleCategoryFeedFile(string $lang, string $slug, string $format): void
+{
+    require_once CORE_PATH . '/FeedCompiler.php';
+    if (!Env::bool('FEED_ENABLED', true) || !in_array($format, FeedCompiler::formats(), true)) {
+        http_response_code(404);
+        exit;
+    }
+    $filePath = FeedCompiler::categoryFile($lang, $slug, $format);
+    if (!is_file($filePath)) {
+        // Auto-Healing only for a real, enabled category: an unknown slug must not trigger a rebuild
+        $cat = DB::fetchOne(
+            "SELECT id FROM categories WHERE type = 'post' AND lang = ? AND slug = ? AND feed_enabled = TRUE LIMIT 1",
+            [$lang, $slug]
+        );
+        if ($cat) {
             FeedCompiler::compile($lang);
         }
     }
+    serveFeedFile($filePath, $format);
+}
 
+function serveFeedFile(string $filePath, string $format): void
+{
     if (!is_file($filePath)) {
         http_response_code(404);
         exit;
     }
-
-    $contentType = $format === 'atom' ? 'application/atom+xml' : 'application/rss+xml';
-    header("Content-Type: {$contentType}; charset=UTF-8");
+    header('Content-Type: ' . FeedCompiler::FORMATS[$format][1] . '; charset=UTF-8');
     SecurityHeaderCompiler::emit('frontend');
     readfile($filePath);
     exit;
@@ -804,7 +828,9 @@ function renderWithFpc(?string $fpcKey, string $viewName, array $data): void
             if (is_file($fpcFile)) {
                 flock($fp, LOCK_UN);
                 fclose($fp);
-                readfile($fpcFile);
+                if (!CacheManager::sendValidators($fpcFile)) {
+                    readfile($fpcFile);
+                }
                 exit;
             }
             ob_start();
@@ -819,7 +845,9 @@ function renderWithFpc(?string $fpcKey, string $viewName, array $data): void
 
             flock($fp, LOCK_UN);
             fclose($fp);
-            echo $html;
+            if (!CacheManager::sendValidators($fpcFile)) {
+                echo $html;
+            }
         } else {
             // Loser: wait up to 3 seconds, then readfile
             if ($fp) {
@@ -828,7 +856,9 @@ function renderWithFpc(?string $fpcKey, string $viewName, array $data): void
             $deadline = microtime(true) + 3.0;
             while (microtime(true) < $deadline) {
                 if (is_file($fpcFile)) {
-                    readfile($fpcFile);
+                    if (!CacheManager::sendValidators($fpcFile)) {
+                        readfile($fpcFile);
+                    }
                     exit;
                 }
                 usleep(50000);

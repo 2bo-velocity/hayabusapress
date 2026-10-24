@@ -12,12 +12,43 @@
         <div>
             <label class="block text-sm font-medium mb-1">{@ meta_description @}</label>
             <textarea name="default_description" rows="2"
-                      class="w-full px-4 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">{{{ $seoConfig['default_description'] ?? '' }}}</textarea>
+                      class="w-full px-4 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">{{ $seoConfig['default_description'] ?? '' }}</textarea>
         </div>
         <div>
             <label class="block text-sm font-medium mb-1">{@ meta_keywords @}</label>
             <input type="text" name="default_keywords" value="{{ $seoConfig['default_keywords'] ?? '' }}"
                    class="w-full px-4 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+        </div>
+    </div>
+
+    <div class="bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+        <h3 class="font-medium">{@ seo_output_section @}</h3>
+        <div>
+            <label class="block text-sm font-medium mb-1">{@ seo_title_format @}</label>
+            <input type="text" name="title_format" value="{{ $seoConfig['title_format'] ?? SeoCompiler::DEFAULT_TITLE_FORMAT }}" maxlength="100"
+                   class="w-full px-4 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+            <p class="text-xs text-slate-400 mt-1">{@ seo_title_format_hint @}</p>
+        </div>
+        <div>
+            <label class="block text-sm font-medium mb-1">{@ seo_slug_mode @}</label>
+            <select name="slug_mode" class="w-full px-4 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+                <?php foreach (['title' => '{@ seo_slug_mode_title @}', 'datetime' => '{@ seo_slug_mode_datetime @}', 'id' => '{@ seo_slug_mode_id @}'] as $sm => $sl): ?>
+                <option value="<?= $sm ?>" <?= ($seoConfig['slug_mode'] ?? 'title') === $sm ? 'selected' : '' ?>><?= $sl ?></option>
+                <?php endforeach; ?>
+            </select>
+            <p class="text-xs text-slate-400 mt-1">{@ seo_slug_mode_hint @}</p>
+        </div>
+        <div>
+            <label class="block text-sm font-medium mb-1">{@ publish_slots @}</label>
+            <input type="text" name="publish_slots" value="{{ $seoConfig['publish_slots'] ?? '' }}" maxlength="100" placeholder="07:00, 12:00, 18:00, 21:00"
+                   class="w-full px-4 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+            <p class="text-xs text-slate-400 mt-1">{@ publish_slots_hint @}</p>
+        </div>
+        <div>
+            <label class="block text-sm font-medium mb-1">{@ seo_publisher_logo @}</label>
+            <input type="text" name="publisher_logo" value="{{ $seoConfig['publisher_logo'] ?? '' }}" maxlength="255" placeholder="/assets/site/logo.png"
+                   class="w-full px-4 py-2.5 text-sm border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+            <p class="text-xs text-slate-400 mt-1">{@ seo_publisher_logo_hint @}</p>
         </div>
     </div>
 
@@ -43,7 +74,7 @@
     <div class="bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-5 space-y-4">
         <h3 class="font-medium">robots.txt</h3>
         <textarea name="robots" rows="6"
-                  class="w-full px-4 py-2.5 text-sm font-mono border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">{{{ $robots }}}</textarea>
+                  class="w-full px-4 py-2.5 text-sm font-mono border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">{{ $robots }}</textarea>
     </div>
 
     <button type="submit" class="bg-emerald-500 hover:bg-emerald-600 text-white font-medium px-6 py-2.5 rounded-xl transition-colors text-sm">

@@ -1,7 +1,8 @@
 <?php
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
-$seoMeta  = '<title>' . htmlspecialchars($siteName ?? 'HBP', ENT_QUOTES, 'UTF-8') . '</title>';
+// Title, description, OGP and JSON-LD (WebSite on the top page) come from the SEO settings
+$seoMeta  = SeoCompiler::buildListMeta('', $canonical ?? '', $lang ?? '');
 $langPrefix = ($lang === $defaultLang) ? '' : "/{$lang}";
 ?>
 {% include 'header' %}

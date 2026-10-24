@@ -50,6 +50,16 @@ Every design decision answers one question: *can we pre-compute this so the fron
 | **Buttons** | A line `[[button:Label\|URL\|note]]` renders a call-to-action button with an optional note above it. Unsafe URL schemes are dropped. |
 | **Managed links (`/go/`)** | Register `alias → https://…` in **Admin → Links** and link to `/go/alias`. Served as a 302 from a compiled array — no DB query, no page cache. Only registered `https://` targets; responses carry `X-Robots-Tag: noindex, nofollow`, and the generated `robots.txt` disallows `/go/`. |
 | **Sponsored disclosure** | Per-post "contains promotional content" toggle: a notice is printed at the top of the body (text configurable via `SPONSORED_NOTICE_TEXT`) and external links get `rel="sponsored"`. Links to `/go/` always carry `rel="sponsored nofollow"`. |
+| **Publishing slots & schedule** | Declare the times you publish every day (e.g. `07:00, 12:00, 21:00`) in the SEO settings. The editor offers them as buttons plus a *next free slot* shortcut, and **Admin → Schedule** lays scheduled/published posts out as days × slots with free slots highlighted. Admin-only — nothing runs on public pages. |
+| **Titles, descriptions & slugs** | A page-title format (`{title} \| {site}`). An empty description is filled at save time with a ~120-character excerpt of the body (`meta_description_auto`; the TOC and sponsored notice are skipped). An empty slug is generated from the title, the date/time (`20261024-0700`) or the post ID (`p123`); a title with no ASCII left falls back to date/time. |
+| **Structured data (JSON-LD)** | `BlogPosting` + `BreadcrumbList` on posts, `WebPage` on pages, `WebSite` on the top page — built while the page cache is written. `application/ld+json` is a data block, so the CSP needs no hash for it. |
+| **Distribution feeds** | JSON Feed 1.1 (`/feed.json`) next to Atom/RSS, and per-category feeds (`/feeds/{lang}/category/{slug}.{atom.xml,rss.xml,json}`) for categories with *feed* switched on. JSON items carry `_hbp.share_text`: a social-post text you type, or one generated at save time from title + description + the category's hashtags and sized to **X's weighted count** (CJK = 2, URL = 23) with room left for the link. |
+| **301 for renamed slugs** | Changing the slug of a published post keeps the old one; `/post/{old}` answers 301 to the current URL from a compiled array (no DB, never cached). Chains collapse, and a slug reused by another post wins over the redirect. |
+| **Post templates** | Starting points for new posts (title, body, category, tags, layout, TOC, sponsored flag; `{date}` → today). Using one **copies** it — editing the template later changes no existing post. |
+| **Callouts, speech bubbles & post cards** | `:::quote Source\|URL`, `:::box summary Title` and `:::say speaker` … `:::` wrap ordinary Markdown in a cited quote, a box or a speech bubble (speakers are registered in the admin). `{{ card:slug }}` bakes a card linking another published post. Wrappers are built after the sanitizer from validated arguments; the content inside is sanitized as usual. |
+| **WebP & image dimensions** | Uploaded JPEG/PNG also get a WebP copy (`{file}.webp`, kept only when smaller) served through `<picture>`; body images get their real `width`/`height` so nothing shifts while they load. The copy is an `attachments` row of its own, so it moves, is deleted and garbage-collected with the original. `IMAGE_WEBP=off` disables it. |
+| **Conditional GET** | Cached pages carry `ETag` / `Last-Modified` (from the cache file itself — one `stat`) and `Cache-Control: no-cache`; a matching `If-None-Match` / `If-Modified-Since` gets **304**. |
+| **Raw-HTML trust per post** | Whether a post's embeds survive the sanitizer is recorded on the post: did the person who last saved its **body** hold `post:raw_html`? Saving only metadata keeps it, and `posts:recompile` honours it — so a lower role fixing a category never strips an admin's embed. Revoke on purpose with `posts:recompile --reassess` or the "also turn off embeds" option when downgrading a role. |
 | **Featured image / OGP** | `posts.featured_image` + `featured_image_alt`. Set via the right-side drawer; fallback chain (post's first image → site logo) resolved **at save time** and baked — zero runtime body scan. Drives `og:image`. |
 | **Responsive & fluid typography** | Theme guideline: reader-side body column ~720px, `clamp()` 16→18px; admin-side liquid full-width, labels 14px, **inputs ≥16px** (prevents iOS zoom). |
 | **Physical media isolation** | Draft media lives in `storage/upload/` (web-inaccessible). Moved to `public/assets/articles/` atomically on publish, and **moved back on unpublish**. |
@@ -60,12 +70,12 @@ Every design decision answers one question: *can we pre-compute this so the fron
 | **Email-optional comments** | Comments require only name + body; **email and website are optional** (`comments.author_email` is nullable). HBP ships no reply-notification mail and no external Gravatar, so it never collects email it cannot use. Commenter avatars are a **bundled SVG silhouette** (`public/assets/site/avatar-default.svg`, `fill="currentColor"` to track the theme) — zero external requests. Per-content acceptance is the `posts.allow_comment` toggle in the editor's right drawer. |
 | **Comment moderation filters** | The comment admin shares the content-list design (PC filter bar + table, mobile card list, pagination). Filter by status (with count badges), **created-date range**, name / email / website (`LIKE`), and linked content (`post_id`, reached from the content list). The comment **body is intentionally not searchable** (long-text = index-inefficient). No new indexes — `status`/date narrow via `idx_status_created`, `post_id` via `idx_comments_post`. No bulk actions; delete still requires confirmation. Needs `comment:moderate`. |
 | **Super User** | Highest-privilege admin authenticated via `.env` only — never stored in DB. A DB wipe cannot lock you out. |
-| **Role-based access control** | Static RBAC matrix (`permissions.php`, zero DB queries). 4 staff roles (Administrator / Editor / Author / Contributor) + Super User, mapped across 17 fine-grained permissions (posts, comments, media, taxonomy, navigation, blocks, links, maintenance, IP, plugins, themes, users, settings). |
+| **Role-based access control** | Static RBAC matrix (`permissions.php`, zero DB queries). 4 staff roles (Administrator / Editor / Author / Contributor) + Super User, mapped across 18 fine-grained permissions (posts, comments, media, taxonomy, navigation, blocks, templates, links, maintenance, IP, plugins, themes, users, settings). |
 | **Native TOTP 2FA** | RFC 6238-compliant. Replay prevention (`tfa_last_step`), 5-strike session destruction, time-step reuse detection. |
 | **Manifest-based plugins** | `manifest.json` declares hooks. Hook registry pre-compiled and priority-sorted. No full plugin load per request. Static HTML snippets for `<head>` and the end of `<body>` are baked into the page cache — zero runtime cost. |
 | **zip-slip-safe installer** | `PluginInstaller` validates every ZIP entry, blocks symlinks + zip-bombs, optionally enforces Ed25519 signatures. |
 | **Dual IP blocklist** | `blocked_ips` table blocks POST-type spam. `SITE_IP_DENYLIST` blocks page views via compiled array — zero DB hit. |
-| **Atom 1.0 + RSS 2.0 feeds** | Pre-compiled per-language feeds (`feed.atom.xml`, `feed.rss.xml`). Generated at post publish — zero DB on serving. Autodiscovery `<link>` in every `<head>`. |
+| **Atom 1.0 + RSS 2.0 + JSON Feed** | Pre-compiled per-language feeds (`feed.atom.xml`, `feed.rss.xml`, `feed.json` — chosen by `FEED_FORMAT`). Generated at post publish — zero DB on serving. Autodiscovery `<link>` in every `<head>`. |
 | **Scheduled publishing** | `status='scheduled'` + `published_at` (UTC). Fires via pseudo-cron (default, **zero impact on the FPC fast path** — one integer compare), OS cron, or a manual `/cron` endpoint. `published_at` is the single source of truth for post date. |
 | **Sitemap index** | Auto-splits into `sitemaps/posts-N.xml` (50 k URL chunks) when site grows large. |
 | **Browser maintenance** | Admin → Maintenance page rebuilds sitemap / feeds / plugins / all caches from the browser — no SSH required (equivalent to `system:init`). |
@@ -151,6 +161,10 @@ php core/cli.php db:migrate
 # 4. Rebuild derived data, then every cache
 php core/cli.php system:init && php core/cli.php plugins:rebuild
 ```
+
+Upgrading to **1.4.0** (`V001004000`) adds one step between 3 and 4: run
+`php core/cli.php posts:recompile --reassess` once. It records, for every post, whether its body keeps
+raw HTML (from the author's current role) and fills the generated description and share text.
 
 > **Step 4 varies by release.** Some schema changes need denormalized data backfilled before the site
 > reads correctly again — `tags:reindex` (post_tags listing keys) and `counters:rebuild`
@@ -308,6 +322,10 @@ If any returns 200, stop immediately and re-check your deployment method.
 
 See `deploy/README-shared-hosting.md` for step-by-step instructions.
 
+On Nginx, `deploy/nginx.sample.conf` serves the feed files directly and falls back to `index.php` when one is
+missing (Auto-Healing): `/feed.atom.xml`, `/feed.rss.xml`, `/feed.json`, their `/{lang}/…` variants, and the
+per-category feeds under `/feeds/{lang}/category/`.
+
 ---
 
 ## CLI Reference
@@ -331,14 +349,14 @@ See `deploy/README-shared-hosting.md` for step-by-step instructions.
 | `lang:rebuild [locale]` | Delete MUI view caches for a locale (or all locales) to force re-bake |
 | `assets:rebuild` | Purge all FPC + view caches + recompile CSP hashes after theme CSS/JS edits |
 | `authors:rebuild` | Rebuild `authors.cache.php` + purge affected post FPCs |
-| `posts:recompile` | Re-run Markdown → HTML + sanitizer on all posts (use after updating sanitizer rules or `SPONSORED_NOTICE_TEXT`) |
+| `posts:recompile [--reassess [--user=ID]]` | Re-run Markdown → HTML + sanitizer on all posts with the raw-HTML trust recorded on each (use after updating sanitizer rules, `SPONSORED_NOTICE_TEXT`, a speaker, or a post a card points to). Also refreshes the generated description and share text. `--reassess` first resets that trust from the current role of whoever last saved each body (`--user=ID` limits it to one saver; `0` = Super User) |
 | `blocks:rebuild` | Recompile `blocks.cache.php` (reusable blocks) and purge all FPC |
 | `links:rebuild` | Recompile `links.cache.php` (the `/go/` alias table) |
 | `media:gc [--days=N]` | Garbage-collect orphan draft media in `storage/upload/` not referenced by any `attachments` row, older than N days (default 7). Walks the `{ab}/{cd}/` shard tree |
 | `media:reshard [--dry-run]` | Migrate an existing flat media layout into the `{ab}/{cd}/` two-level shards: move files, rewrite body/featured-image public URLs flat→shard, then regenerate search index, list FPC, sitemap & feeds. Idempotent |
 | `cache:purge-category {id}` | Purge FPC for all posts in a category (precision cleanup) |
 | `config:rebuild` | Explicitly regenerate `env.cache.php` |
-| `feed:rebuild` | Regenerate Atom/RSS feeds for all languages (`FEED_ENABLED=true`) |
+| `feed:rebuild` | Regenerate the feeds of every language and every feed-enabled category (`FEED_ENABLED=true`) |
 | `posts:publish-due` | Promote `scheduled` posts whose `published_at` has arrived (cron / manual trigger) |
 | `schedule:recompile` | Recompute `next_schedule.php` (the next pseudo-cron fire time) |
 
@@ -377,7 +395,9 @@ All expensive computation happens at **write time**. Frontend requests pay nothi
 | CSP hashes | `assets:rebuild` | `cache/security_headers.cache.php` |
 | Theme CSS/JS | View compile | Inlined into view cache HTML |
 | Sitemap | Post publish / unpublish | `public/sitemap.xml` (+ `sitemaps/`) |
-| Feeds (Atom/RSS) | Post publish / unpublish | `public/feed.atom.xml`, `public/{lang}/feed.rss.xml` |
+| Feeds (Atom/RSS/JSON) | Post publish / unpublish, category save | `public/feed.{atom.xml,rss.xml,json}`, `public/{lang}/…`, `public/feeds/{lang}/category/{slug}.*` |
+| Description excerpt + share text | Post save | `posts.meta_description_auto`, `posts.share_text_auto` |
+| Slug redirects | Post save / trash / restore / delete | `cache/redirects.cache.php` |
 | Next schedule fire time | Post save / publish-due | `cache/next_schedule.php` (one integer) |
 
 ### On-Demand FPC
@@ -390,6 +410,10 @@ GET /post/hello-world
 ```
 
 FPC file naming: `{lang}_{type}_{slug}.html` · paginated: `{lang}_home_p2.html`
+
+A cache hit also sends `ETag` / `Last-Modified` derived from the cache file and `Cache-Control: no-cache`, so a
+browser or crawler revalidates and gets a bodiless **304** while the page is unchanged. A purge (an edit) makes a
+new file and therefore new validators.
 
 ### Router: O(1) Pattern Matching
 
@@ -455,6 +479,20 @@ SCHEDULE_MODE=manual           — external monitor hits GET /cron (e.g. cron-jo
 
 When a scheduled post is saved or fires, `Scheduler::recompileNext()` bakes the next due timestamp into `cache/next_schedule.php` — so the hot path stays a single integer comparison.
 
+For exact publishing slots (e.g. on the hour), use `SCHEDULE_MODE=cron` with a per-minute OS cron: pseudo-cron fires on the next page view, which can be late on a quiet morning.
+
+### Feeds
+
+```ini
+FEED_ENABLED=true
+FEED_FORMAT=both     # both (= atom,rss) | all (= atom,rss,json) | atom | rss | json, or a comma list
+```
+
+`json` is JSON Feed 1.1 (`/feed.json`). Each item carries an `_hbp` extension — `share_text`, `category`,
+`hashtags` — so an automation that posts new entries elsewhere can use the text as is. A category with
+*Publish a feed for this category* (Admin → Categories) also gets `/feeds/{lang}/category/{slug}.{atom.xml,rss.xml,json}`;
+its hashtags are appended to the generated share text of its posts.
+
 ---
 
 ## Roles & Permissions
@@ -486,7 +524,8 @@ Each capability is a permission key checked via `Gate::can('post:publish')`. `�
 | `media:manage` | Upload / delete media | ✅ | ✅ | ✅ (own) | ❌ |
 | `taxonomy:manage` | Create / edit / delete categories & tags | ✅ | ✅ | ❌ | ❌ |
 | `nav:manage` | Edit navigation menus & widgets (a raw-HTML widget also needs `post:raw_html`) | ✅ | ❌ | ❌ | ❌ |
-| `blocks:manage` | Create / edit / delete reusable blocks | ✅ | ❌ | ❌ | ❌ |
+| `blocks:manage` | Create / edit / delete reusable blocks and speech-bubble speakers | ✅ | ❌ | ❌ | ❌ |
+| `templates:manage` | Create / edit / delete post templates | ✅ | ✅ | ❌ | ❌ |
 | `links:manage` | Manage `/go/` links | ✅ | ❌ | ❌ | ❌ |
 | `maintenance:run` | Rebuild caches/sitemap/feeds (Admin → Maintenance) | ✅ | ❌ | ❌ | ❌ |
 | `ip:manage` | Manage admin allowlist & public blocklists (A/B) | ✅ | ❌ | ❌ | ❌ |
@@ -501,6 +540,8 @@ Each capability is a permission key checked via `Gate::can('post:publish')`. `�
 - **Ownership.** `✅ (own)` permissions resolve ownership via `posts.user_id` (and `attachments` ownership for media). Super User content is `user_id = NULL` (id `0`).
 - **Scheduling is publishing.** Reserving a future `published_at` (`status='scheduled'`) requires `post:publish`; no separate permission. Contributors therefore cannot schedule.
 - **Contributor workflow.** Without `post:publish`, a Contributor's post stays `draft`; an Editor/Administrator reviews and publishes it.
+- **Raw HTML is recorded per post.** `post:raw_html` is checked when a post's body is saved and the answer is stored on the post (`raw_html_allowed`, `content_saved_by`). A save that does not change the body keeps it; `posts:recompile` reuses it. Losing the permission does not change existing posts until you revoke it: tick *also turn off embeds in posts this user saved* when changing the role in **Admin → Users**, or run `posts:recompile --reassess --user=ID`.
+- **The schedule lists everyone's posts**, so **Admin → Schedule** needs `post:edit_other`.
 - **Maintenance from the browser.** The **Admin → Maintenance** page (SSH-free cache rebuild) requires `maintenance:run`.
 - **Super User is not a role row.** It is authenticated via `.env` and bypasses the matrix entirely; never create it in the `users` table.
 
@@ -546,10 +587,15 @@ hayabusapress/
 │   ├── SidebarCompiler.php     # Widget HTML compiler (6 areas, per-language)
 │   ├── BlockCompiler.php       # Reusable blocks → blocks.cache.php, expanded when the FPC is written
 │   ├── LinkCompiler.php        # /go/{alias} → links.cache.php, served as a 302 without a DB query
+│   ├── RedirectCompiler.php    # Old slugs → redirects.cache.php, served as a 301 without a DB query
+│   ├── SpeakerCompiler.php     # :::say speakers → speakers.cache.php
+│   ├── PostCompiler.php        # Re-rendering with the raw-HTML trust recorded per post; share text
+│   ├── ShareText.php           # Social-post text sized for X's weighted character count
+│   ├── PublishSlots.php        # Daily publishing slots, next free slot, the weekly schedule grid
 │   ├── CommentCompiler.php     # Approved comment cache + FPC + sidebar sync
 │   ├── SeoCompiler.php         # SEO/analytics tag compiler
 │   ├── SiteFileCompiler.php    # sitemap.xml (index + split) / robots.txt generator
-│   ├── FeedCompiler.php        # Atom 1.0 / RSS 2.0 per-language feed generator
+│   ├── FeedCompiler.php        # Atom 1.0 / RSS 2.0 / JSON Feed 1.1 per language and per category
 │   ├── Scheduler.php           # Scheduled publishing: runDue + next_schedule.php
 │   ├── CategoryCompiler.php    # Category metadata cache
 │   ├── TagCompiler.php         # Tag metadata cache
@@ -562,7 +608,7 @@ hayabusapress/
 │   ├── Installer.php           # Embedded installer (hidden; activates only when .env missing)
 │   ├── AdminPostController.php # Post save orchestrator
 │   ├── AdminUserController.php # Staff + 2FA management
-│   ├── permissions.php         # Static RBAC matrix (17 permissions × 4 roles)
+│   ├── permissions.php         # Static RBAC matrix (18 permissions × 4 roles)
 │   ├── cli.php                 # CLI entry point
 │   │
 │   ├── controllers/
@@ -593,6 +639,9 @@ hayabusapress/
 │   │   ├── sidebar.tpl.php
 │   │   ├── blocks.tpl.php
 │   │   ├── links.tpl.php
+│   │   ├── schedule.tpl.php        # Days × publishing slots
+│   │   ├── templates.tpl.php       # Post templates
+│   │   ├── speakers.tpl.php        # Speech-bubble speakers
 │   │   ├── categories.tpl.php
 │   │   ├── tags.tpl.php
 │   │   ├── plugins.tpl.php
@@ -645,6 +694,8 @@ hayabusapress/
 │       ├── widget_comments_{lang}.cache.php
 │       ├── blocks.cache.php        # Reusable blocks
 │       ├── links.cache.php         # /go/ alias table
+│       ├── redirects.cache.php     # Old slug → current URL (301)
+│       ├── speakers.cache.php      # :::say speakers
 │       ├── plugin_snippets.cache.php
 │       ├── pages/                  # FPC: {lang}_{type}_{slug}.html (+ _p{n} variants)
 │       │   └── .locks/             # Stampede lock files
@@ -657,6 +708,8 @@ hayabusapress/
     ├── sitemap.xml                 # Sitemap index (or single file for small sites)
     ├── sitemaps/                   # Split sub-sitemaps (posts-1.xml, pages.xml, …)
     ├── robots.txt
+    ├── feed.atom.xml · feed.rss.xml · feed.json   # Default-language feeds ({lang}/ for the others)
+    ├── feeds/{lang}/category/      # Per-category feeds of feed-enabled categories
     ├── .htaccess                   # Apache rewrite rules (clean URLs)
     ├── comment_post.php
     ├── assets/
@@ -696,17 +749,18 @@ The full schema files (`schema.mysql.sql` / `schema.pgsql.sql`) always describe 
 -- end of schema.{driver}.sql
 INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
   VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>),
-         ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>);
+         ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>),
+         ('V001004000', 'seo_feeds_templates',               'BASELINE', <now>);
 ```
 
 - `checksum = 'BASELINE'` is a sentinel meaning "this row came from a full schema, not a diff migration" — checksum verification skips `BASELINE` rows.
-- Because `db:install` applies the full schema **including this INSERT**, a fresh database immediately reports itself as the current version (`V001003000`) = fully up to date. `db:migrate` then correctly finds **nothing pending** (it will never try to re-add existing columns).
+- Because `db:install` applies the full schema **including this INSERT**, a fresh database immediately reports itself as the current version (`V001004000`) = fully up to date. `db:migrate` then correctly finds **nothing pending** (it will never try to re-add existing columns).
 
 #### The three guarantees
 
 | Mechanism | Role |
 |---|---|
-| **Baseline INSERT** in each full schema | A freshly installed DB records its version (`V001000000`) atomically with the schema — no "unknown version" gap. |
+| **Baseline INSERT** in each full schema | A freshly installed DB records its version (the `V001000000` floor plus every folded diff) atomically with the schema — no "unknown version" gap. |
 | **`SCHEMA_VERSION` constant** (`core/Schema.php`) | The version the *code* expects. Startup/CLI compares it with the latest applied row and warns on mismatch (code vs. DB drift). |
 | **`db:status` report** | Prints DB version, code-expected version, driver, and any pending migrations with the exact command to run — answers "how far do I need to migrate?" at a glance. |
 
@@ -720,6 +774,7 @@ The full schema files always describe the latest version and record every diff a
 | Version | Migration | Changes |
 |---|---|---|
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`; `posts.layout` / `show_toc` / `is_sponsored`; new tables `blocks` and `links` |
+| 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`; `categories.hashtags` / `feed_enabled`; new tables `post_templates`, `slug_redirects` and `speakers`. Then run `posts:recompile --reassess` once |
 
 > This stays within HBP's constitution: pure PHP + PDO, raw SQL, zero external tooling (no Flyway/Liquibase).
 
@@ -728,7 +783,7 @@ The full schema files always describe the latest version and record every diff a
 | # | Table | Purpose |
 |---|---|---|
 | 1 | `users` | Staff accounts (Super User is `.env`-only) |
-| 2 | `categories` | Categories (`type` = post \| page, `lang` column) |
+| 2 | `categories` | Categories (`type` = post \| page, `lang` column, `hashtags` for share text, `feed_enabled` for a per-category feed) |
 | 3 | `tags` | Tags (`type` = post \| page, `lang` column) |
 | 4 | `posts` | All content — posts and pages unified via `type` |
 | 5 | `post_tags` | Tag-to-post join table |
@@ -742,6 +797,9 @@ The full schema files always describe the latest version and record every diff a
 | 13 | `schema_migrations` | Migration tracking with checksum verification |
 | 14 | `blocks` | Reusable content blocks (`slug` + `lang` unique, Markdown body) |
 | 15 | `links` | Managed outbound links (`alias` unique → `target_url`) |
+| 16 | `post_templates` | Starting points for new posts (copied into the post, never linked) |
+| 17 | `slug_redirects` | Old slugs of published posts → `post_id`, served as 301 |
+| 18 | `speakers` | Speakers of `:::say` speech bubbles (`slug` unique, name, avatar, side) |
 
 ### Key `posts` columns
 
@@ -760,6 +818,9 @@ The full schema files always describe the latest version and record every diff a
 | `layout` | Theme layout id (`NULL` = the theme's default; unknown ids fall back to it) |
 | `show_toc` | Insert a table of contents at save time |
 | `is_sponsored` | Print the sponsored disclosure and mark external links `rel="sponsored"` |
+| `meta_description_auto` | Excerpt of the body baked at save time; used when `meta_description` is empty |
+| `share_text` / `share_text_auto` | Social-post text typed by the editor / generated at save time (JSON Feed `_hbp.share_text`) |
+| `raw_html_allowed` / `content_saved_by` | Whether the last body save was by a holder of `post:raw_html`, and who (`0` = Super User). Recompiles use this, not anyone's current role |
 | `user_id` | `NULL` = Super User. `ON DELETE RESTRICT` — reassignment required before staff deletion |
 
 > Index `idx_posts_schedule (status, published_at)` drives the `WHERE status='scheduled' AND published_at <= NOW()` lookup; all list indexes sort by `published_at DESC`.
@@ -788,7 +849,7 @@ The full schema files always describe the latest version and record every diff a
 | Draft media leakage | `storage/upload/` — web server denies all access; PHP-mediated delivery only. Uploads follow the same isolation + `media:manage` gate. **Unpublishing moves media back to `storage/upload/`** so non-public posts' media is never web-reachable |
 | `.env` leakage (shared hosting) | Method B (app outside web root) / Method A (`.htaccess`) + bootstrap self-defense + installer self-diagnosis |
 | XML-RPC attacks | File does not exist — not a single line of code |
-| Privilege escalation | Static RBAC (`Gate::can()`, `permissions.php`) — 17 permissions × 4 roles; ownership-scoped checks; Super User via `.env` only |
+| Privilege escalation | Static RBAC (`Gate::can()`, `permissions.php`) — 18 permissions × 4 roles; ownership-scoped checks; Super User via `.env` only |
 | Super User DB exposure | Super User is `.env`-only; DB compromise cannot yield root credentials |
 
 ### Content Security Policy
@@ -942,6 +1003,19 @@ HBP compiles its own lightweight template syntax to plain PHP — no external en
 | `{% include 'name' %}` | `View::render('name', get_defined_vars())` |
 | `{# inline_css 'file.css' #}` | `<style>` + minified CSS content |
 | `{# inline_js 'file.js' #}` | `<script>` + minified JS content |
+
+### Markdown extensions (resolved at save time)
+
+| Write (on its own line) | Result |
+|---|---|
+| `{{ block:slug }}` | Reusable block, expanded when the page cache is written |
+| `[[button:Label\|URL\|note]]` | Call-to-action button with an optional note above it |
+| `{{ card:slug }}` | Card linking another published post of the same language (baked; a missing slug is reported in the editor) |
+| `:::quote Source\|URL` … `:::` | `<figure>` with a `<blockquote cite>` and a `<figcaption>` citing the source |
+| `:::box note\|summary\|warning\|conclusion Title` … `:::` | Box with an optional title (other types fall back to `note`) |
+| `:::say speaker [left\|right]` … `:::` | Speech bubble of a speaker registered in **Admin → Speakers** |
+
+Containers do not nest: the first `:::` line closes the open one. The editor toolbar inserts each of them.
 
 The `{@ key @}` MUI system bakes language strings directly into the compiled PHP cache at `ViewCompiler::compile()` time. At render time the template is already translated — no array lookup, no function call.
 

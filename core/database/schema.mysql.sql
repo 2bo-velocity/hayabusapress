@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
--- HayabusaPress (HBP) - MySQL 8.x Schema (HBP 1.3.0 / V001003000)
+-- HayabusaPress (HBP) - MySQL 8.x Schema (HBP 1.4.0 / V001004000)
 -- InnoDB / utf8mb4_unicode_ci
 --
 -- The complete, current form of the schema, used for new installs. The schema_migrations INSERT at
@@ -14,6 +14,8 @@
 --   2. Denormalized listing keys on post_tags (type/lang/status/published_at + idx_post_tags_list)
 --   3. categories.post_count / tags.post_count counter columns
 --   4. Widget settings, theme layouts, reusable blocks and managed links (V001003000)
+--   5. Auto descriptions, share text, raw-HTML provenance, category feeds, post templates, slug
+--      redirects and speakers (V001004000)
 
 SET NAMES utf8mb4;
 SET CHARACTER SET utf8mb4;
@@ -47,6 +49,8 @@ CREATE TABLE IF NOT EXISTS `categories` (
   `lang`  VARCHAR(5)   NOT NULL DEFAULT 'en' COMMENT 'Language code',
   `slug`  VARCHAR(255) NOT NULL,
   `name`  VARCHAR(255) NOT NULL,
+  `hashtags`     VARCHAR(255) NULL DEFAULT NULL COMMENT 'Space-separated hashtags for share text',
+  `feed_enabled` TINYINT(1)   NOT NULL DEFAULT 0 COMMENT 'Publish /category/{slug}/feed.*',
   `post_count` INT NOT NULL DEFAULT 0 COMMENT 'Number of published posts. Moved by deltas in core/Counters.php',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_type_lang_slug` (`type`, `lang`, `slug`)
@@ -85,10 +89,15 @@ CREATE TABLE IF NOT EXISTS `posts` (
   `show_share`           TINYINT(1)    NOT NULL DEFAULT 1,
   `meta_description`     VARCHAR(255)  NULL DEFAULT NULL,
   `meta_keywords`        VARCHAR(255)  NULL DEFAULT NULL,
+  `meta_description_auto` VARCHAR(255) NULL DEFAULT NULL COMMENT 'Excerpt baked on save; used when meta_description is empty',
+  `share_text`           VARCHAR(500)  NULL DEFAULT NULL COMMENT 'Social-post text typed by the editor. NULL = share_text_auto',
+  `share_text_auto`      TEXT          NULL DEFAULT NULL COMMENT 'Social-post text generated on save',
   `user_id`              INT UNSIGNED  NULL DEFAULT NULL COMMENT 'NULL means the Super User',
   `show_author`          TINYINT(1)    NOT NULL DEFAULT 1,
   `show_toc`             TINYINT(1)    NOT NULL DEFAULT 0 COMMENT 'Bake a table of contents on save',
   `is_sponsored`         TINYINT(1)    NOT NULL DEFAULT 0 COMMENT 'Sponsored-content notice + rel=sponsored on outbound links',
+  `raw_html_allowed`     TINYINT(1)    NOT NULL DEFAULT 0 COMMENT 'Last body save was by a holder of post:raw_html',
+  `content_saved_by`     INT UNSIGNED  NULL DEFAULT NULL COMMENT 'Who last saved the body. 0 = Super User. No FK on purpose',
   `page_template`        VARCHAR(50)   NULL DEFAULT NULL COMMENT 'Plugin page-template ID',
   `layout`               VARCHAR(50)   NULL DEFAULT NULL COMMENT 'Theme layout ID. NULL = default',
   `trans_group`          VARCHAR(36)   NULL DEFAULT NULL COMMENT 'Translation group key (UUID)',
@@ -245,6 +254,58 @@ CREATE TABLE IF NOT EXISTS `links` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
+-- post_templates (starting points for new posts; copied, never linked)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `post_templates` (
+  `id`           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `name`         VARCHAR(255) NOT NULL COMMENT 'Label shown in the admin only',
+  `type`         VARCHAR(10)  NOT NULL DEFAULT 'post' COMMENT 'post|page',
+  `lang`         VARCHAR(5)   NOT NULL DEFAULT 'en' COMMENT 'Content language code',
+  `title`        VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'Title pattern; {date} is replaced',
+  `body`         LONGTEXT     NOT NULL COMMENT 'Markdown; {date} is replaced',
+  `category_id`  INT UNSIGNED NULL DEFAULT NULL,
+  `tags`         TEXT         NULL DEFAULT NULL COMMENT 'Comma-separated tag names',
+  `layout`       VARCHAR(50)  NULL DEFAULT NULL,
+  `show_toc`     TINYINT(1)   NOT NULL DEFAULT 0,
+  `is_sponsored` TINYINT(1)   NOT NULL DEFAULT 0,
+  `created_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `fk_post_templates_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- slug_redirects (old slugs of published posts, served as 301)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `slug_redirects` (
+  `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `type`       VARCHAR(10)  NOT NULL COMMENT 'post|page',
+  `lang`       VARCHAR(5)   NOT NULL,
+  `old_slug`   VARCHAR(255) NOT NULL,
+  `post_id`    INT UNSIGNED NOT NULL,
+  `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_slug_redirects_old` (`type`, `lang`, `old_slug`),
+  KEY `idx_slug_redirects_post` (`post_id`),
+  CONSTRAINT `fk_slug_redirects_post` FOREIGN KEY (`post_id`) REFERENCES `posts` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- speakers (people shown in :::say speech bubbles)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `speakers` (
+  `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `slug`       VARCHAR(64)  NOT NULL COMMENT '[a-z0-9-]; written as :::say slug',
+  `name`       VARCHAR(255) NOT NULL,
+  `avatar`     VARCHAR(255) NULL DEFAULT NULL COMMENT 'Image URL path',
+  `side`       VARCHAR(5)   NOT NULL DEFAULT 'left' COMMENT 'left|right',
+  `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_speakers_slug` (`slug`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
 -- auth_throttle (rate limiting for login and 2FA)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS `auth_throttle` (
@@ -325,4 +386,5 @@ INSERT IGNORE INTO `navigation_menus` (`location`, `title`, `url`, `sort_order`)
 -- ============================================================
 INSERT IGNORE INTO `schema_migrations` (`version`, `name`, `checksum`, `applied_at`) VALUES
   ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', NOW()),
-  ('V001003000', 'widgets_layouts_links',             'BASELINE', NOW());
+  ('V001003000', 'widgets_layouts_links',             'BASELINE', NOW()),
+  ('V001004000', 'seo_feeds_templates',               'BASELINE', NOW());

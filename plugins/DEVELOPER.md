@@ -100,6 +100,7 @@ plugins/
 - `CSP_MODE=enforce` では `style="..."` 属性と `onclick` などのインラインハンドラは効かない。クラスと `addEventListener` を使う。
 - 断片はサニタイズされずに出力される。
 - テーマが `PluginManager::snippet('head')` / `PluginManager::snippet('body_end')` を出力していないと、断片は出ない（同梱テーマは出力している）。
+- 独自ルートやページテンプレートで同梱テーマの `header` を使うページは、`$seoMeta = SeoCompiler::buildListMeta('ページ名', $canonical, $lang)` を渡すと、SEO 設定のタイトル書式・概要・OGP・パンくずの JSON-LD がそろう（渡さなければサイト名だけの `<title>`）。
 - 最小の例は `hbp-helloworld/snippets/head.html`（HTML コメントを1行置くだけ）。
 
 ---

@@ -330,6 +330,9 @@ match (true) {
     || (preg_match('#^/post/edit/(\d+)$#', $subPath, $m) && ($editId = (int)$m[1]))
     => handleAdminPostEdit($commonData, isset($editId) ? $editId : 0),
 
+    $subPath === '/post/redirect/delete' && isPost()
+    => handleAdminRedirectDelete($adminPath),
+
     $subPath === '/post/save' && isPost()
     => handleAdminPostSave($commonData, $adminPath),
 
@@ -358,6 +361,13 @@ match (true) {
 
     // --- Reusable blocks / managed links ---
     $subPath === '/blocks' => handleAdminBlocks($commonData),
+    $subPath === '/schedule' => handleAdminSchedule($commonData),
+    $subPath === '/speakers' => handleAdminSpeakers($commonData),
+    $subPath === '/speakers/save' && isPost() => handleAdminSpeakerSave($adminPath),
+    $subPath === '/speakers/delete' && isPost() => handleAdminSpeakerDelete($adminPath),
+    $subPath === '/templates' => handleAdminTemplates($commonData),
+    $subPath === '/templates/save' && isPost() => handleAdminTemplateSave($adminPath),
+    $subPath === '/templates/delete' && isPost() => handleAdminTemplateDelete($adminPath),
     $subPath === '/blocks/save' && isPost() => handleAdminBlockSave($adminPath),
     $subPath === '/blocks/delete' && isPost() => handleAdminBlockDelete($adminPath),
     $subPath === '/links' => handleAdminLinks($commonData),
@@ -376,6 +386,7 @@ match (true) {
     $subPath === '/users' => handleAdminUsers($commonData),
     $subPath === '/user/save' && isPost() => handleAdminUserSave($adminPath),
     $subPath === '/user/delete' && isPost() => handleAdminUserDelete($adminPath),
+    $subPath === '/user/role' && isPost() => handleAdminUserRole($adminPath),
     $subPath === '/user/2fa' && isPost() => handleAdminUser2fa($adminPath),
 
     // --- Profile ---
@@ -611,6 +622,159 @@ function assertCanDeletePost(int $postId): ?array
     return $post;
 }
 
+/** Days x publishing slots for one week (PublishSlots). Editors and up: it lists everyone's posts. */
+function handleAdminSchedule(array $common): void
+{
+    Gate::authorize('post:edit_other');
+    require_once CORE_PATH . '/PublishSlots.php';
+    $tz    = PublishSlots::tz();
+    $start = (string)($_GET['week'] ?? '');
+    $start = preg_match('/^\d{4}-\d{2}-\d{2}$/', $start) ? $start : (new DateTimeImmutable('now', $tz))->format('Y-m-d');
+    $week  = PublishSlots::week($start);
+    $base  = new DateTimeImmutable($start, $tz);
+    $dayLabels = [];
+    foreach ($week['days'] as $d) {
+        $dt = new DateTimeImmutable($d, $tz);
+        $dayLabels[$d] = $dt->format('m/d') . ' ' . HbpLocale::t('weekday_' . strtolower($dt->format('D')), $dt->format('D'));
+    }
+    View::render('admin/schedule', array_merge($common, [
+        'week'      => $week,
+        'dayLabels' => $dayLabels,
+        'prevWeek'  => $base->modify('-7 days')->format('Y-m-d'),
+        'nextWeek'  => $base->modify('+7 days')->format('Y-m-d'),
+    ]));
+}
+
+function handleAdminSpeakers(array $common): void
+{
+    Gate::authorize('blocks:manage');
+    $speakers = DB::fetchAll('SELECT id, slug, name, avatar, side FROM speakers ORDER BY slug');
+    View::render('admin/speakers', array_merge($common, compact('speakers')));
+}
+
+function handleAdminSpeakerSave(string $adminPath): void
+{
+    Gate::authorize('blocks:manage');
+    require_once CORE_PATH . '/SpeakerCompiler.php';
+    $id     = (int)($_POST['id'] ?? 0);
+    $slug   = trim((string)($_POST['slug'] ?? ''));
+    $name   = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 255);
+    $avatar = trim((string)($_POST['avatar'] ?? ''));
+    $avatar = $avatar !== '' ? SidebarCompiler::safeUrl($avatar, false) : '';
+    $side   = ($_POST['side'] ?? '') === 'right' ? 'right' : 'left';
+    if (!preg_match(SpeakerCompiler::SLUG_PATTERN, $slug) || $name === '') {
+        header('Location: /' . $adminPath . '/speakers?error=1');
+        exit;
+    }
+    try {
+        if ($id > 0) {
+            DB::execute('UPDATE speakers SET slug=?, name=?, avatar=?, side=?, updated_at=? WHERE id=?', [$slug, $name, $avatar ?: null, $side, gmdate('Y-m-d H:i:s'), $id]);
+        } else {
+            DB::execute('INSERT INTO speakers (slug, name, avatar, side) VALUES (?,?,?,?)', [$slug, $name, $avatar ?: null, $side]);
+        }
+    } catch (Throwable) {
+        header('Location: /' . $adminPath . '/speakers?error=1');   // duplicate slug
+        exit;
+    }
+    SpeakerCompiler::compile();
+    header('Location: /' . $adminPath . '/speakers?saved=1');
+    exit;
+}
+
+function handleAdminSpeakerDelete(string $adminPath): void
+{
+    Gate::authorize('blocks:manage');
+    require_once CORE_PATH . '/SpeakerCompiler.php';
+    DB::execute('DELETE FROM speakers WHERE id = ?', [(int)($_POST['id'] ?? 0)]);
+    SpeakerCompiler::compile();
+    header('Location: /' . $adminPath . '/speakers');
+    exit;
+}
+
+function handleAdminTemplates(array $common): void
+{
+    Gate::authorize('templates:manage');
+    $templates = DB::fetchAll('SELECT id, name, type, lang FROM post_templates ORDER BY lang, name');
+    $editing   = isset($_GET['id']) ? DB::fetchOne('SELECT * FROM post_templates WHERE id = ? LIMIT 1', [(int)$_GET['id']]) : null;
+    $categories = DB::fetchAll("SELECT id, lang, name FROM categories ORDER BY lang, name");
+    $layouts = [];
+    $uiLocale = View::resolveCurrentLocale('admin/templates');
+    foreach (ThemeManager::layouts() as $id => $def) {
+        $layouts[$id] = ThemeManager::layoutLabel($def, $uiLocale);
+    }
+    View::render('admin/templates', array_merge($common, [
+        'templates'      => $templates,
+        'editing'        => $editing ?: null,
+        'categories'     => $categories,
+        'layouts'        => $layouts,
+        'contentLocales' => HbpLocale::getAvailableContentLocales(),
+    ]));
+}
+
+function handleAdminTemplateSave(string $adminPath): void
+{
+    Gate::authorize('templates:manage');
+    $id   = (int)($_POST['id'] ?? 0);
+    $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 255);
+    $type = ($_POST['type'] ?? '') === 'page' ? 'page' : 'post';
+    $lang = (string)($_POST['lang'] ?? '');
+    if ($name === '' || !array_key_exists($lang, HbpLocale::getAvailableContentLocales())) {
+        header('Location: /' . $adminPath . '/templates?error=1' . ($id ? '&id=' . $id : ''));
+        exit;
+    }
+    $layout = (string)($_POST['layout'] ?? '');
+    $layout = $layout !== '' && array_key_exists($layout, ThemeManager::layouts()) ? $layout : null;
+    $catId  = (int)($_POST['category_id'] ?? 0) ?: null;
+    $tags   = implode(', ', preg_split('/\s*,\s*/u', trim((string)($_POST['tags'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: []);
+    $row = [
+        $name, $type, $lang,
+        mb_substr(trim((string)($_POST['title'] ?? '')), 0, 255),
+        str_replace(["\r\n", "\r"], "\n", (string)($_POST['body'] ?? '')),
+        $catId, $tags !== '' ? $tags : null, $layout,
+        !empty($_POST['show_toc']) ? 1 : 0, !empty($_POST['is_sponsored']) ? 1 : 0,
+        gmdate('Y-m-d H:i:s'),
+    ];
+    if ($id > 0) {
+        DB::execute(
+            'UPDATE post_templates SET name=?, type=?, lang=?, title=?, body=?, category_id=?, tags=?, layout=?, show_toc=?, is_sponsored=?, updated_at=? WHERE id=?',
+            array_merge($row, [$id])
+        );
+    } else {
+        DB::execute(
+            'INSERT INTO post_templates (name, type, lang, title, body, category_id, tags, layout, show_toc, is_sponsored, updated_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+            array_merge($row, [gmdate('Y-m-d H:i:s')])
+        );
+        $id = (int)DB::lastInsertId();
+    }
+    header('Location: /' . $adminPath . '/templates?saved=1&id=' . $id);
+    exit;
+}
+
+function handleAdminTemplateDelete(string $adminPath): void
+{
+    Gate::authorize('templates:manage');
+    DB::execute('DELETE FROM post_templates WHERE id = ?', [(int)($_POST['id'] ?? 0)]);
+    header('Location: /' . $adminPath . '/templates');
+    exit;
+}
+
+/** Forget one old URL of a post (the button lives inside the edit form, so the whole form posts here). */
+function handleAdminRedirectDelete(string $adminPath): void
+{
+    $postId = (int)($_POST['id'] ?? 0);
+    $post   = $postId > 0 ? DB::fetchOne('SELECT user_id FROM posts WHERE id = ? LIMIT 1', [$postId]) : null;
+    $mine   = $post && (int)($post['user_id'] ?? 0) === Auth::id();
+    if (!$post || (!Auth::isSuperUser() && !$mine && Gate::cannot('post:edit_other'))) {
+        http_response_code(403);
+        exit('403 Forbidden');
+    }
+    require_once CORE_PATH . '/RedirectCompiler.php';
+    DB::execute('DELETE FROM slug_redirects WHERE id = ? AND post_id = ?', [(int)($_POST['redirect_id'] ?? 0), $postId]);
+    RedirectCompiler::compile();
+    header('Location: /' . $adminPath . '/post/edit/' . $postId);
+    exit;
+}
+
 function handleAdminPostEdit(array $common, int $postId): void
 {
     // New post: allow the form to be pre-seeded via query (e.g. the plugins screen's
@@ -618,6 +782,7 @@ function handleAdminPostEdit(array $common, int $postId): void
     $prefill = $postId > 0 ? [] : [
         'type'          => $_GET['type']          ?? '',
         'page_template' => $_GET['page_template'] ?? '',
+        'template'      => (int)($_GET['template'] ?? 0),
     ];
     $data = AdminPostController::getEditData($postId > 0 ? $postId : null, $prefill);
     View::render('admin/edit', array_merge($common, $data));
@@ -640,6 +805,11 @@ function handleAdminPostSave(array $common, string $adminPath): void
         // post is not marked as sponsored.
         $hint = empty($_POST['is_sponsored']) && str_contains((string)($_POST['content_markdown'] ?? ''), '](/go/')
             ? '&sponsor_hint=1' : '';
+        // Post cards ({{ card:slug }}) that found no published post were left out of the page
+        $missing = MarkdownCompiler::missingCards();
+        if ($missing) {
+            $hint .= '&card_missing=' . rawurlencode(implode(',', $missing));
+        }
         header('Location: /' . $adminPath . '/post/edit/' . $id . '?saved=1' . $hint);
     } catch (Exception $e) {
         $data = AdminPostController::getEditData(!empty($_POST['id']) ? (int)$_POST['id'] : null);
@@ -1138,19 +1308,34 @@ function handleAdminCategorySave(string $adminPath): void
     }
     $name = mb_substr($name, 0, 255);
     $slug = mb_substr($slug, 0, 255);
+    // Hashtags for generated share text: '#a #b' / 'a, b' -> '#a #b'
+    $tags = preg_split('/[\s,]+/u', trim((string)($_POST['hashtags'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $hashtags = $tags ? mb_substr(implode(' ', array_map(static fn($t) => '#' . ltrim($t, '#'), $tags)), 0, 255) : null;
+    $feedOn   = $type === 'post' && !empty($_POST['feed_enabled']) ? 1 : 0;
+    $before   = $id > 0 ? DB::fetchOne('SELECT lang, hashtags FROM categories WHERE id=? LIMIT 1', [$id]) : null;
 
     // Do not 500 on a UNIQUE(type,lang,slug) violation; return it as a save failure
     try {
         if ($id > 0) {
-            DB::execute('UPDATE categories SET type=?, lang=?, slug=?, name=? WHERE id=?', [$type, $lang, $slug, $name, $id]);
+            DB::execute('UPDATE categories SET type=?, lang=?, slug=?, name=?, hashtags=?, feed_enabled=? WHERE id=?', [$type, $lang, $slug, $name, $hashtags, $feedOn, $id]);
         } else {
-            DB::execute('INSERT INTO categories (type, lang, slug, name) VALUES (?,?,?,?)', [$type, $lang, $slug, $name]);
+            DB::execute('INSERT INTO categories (type, lang, slug, name, hashtags, feed_enabled) VALUES (?,?,?,?,?,?)', [$type, $lang, $slug, $name, $hashtags, $feedOn]);
         }
     } catch (Throwable) {
         header('Location: /' . $adminPath . '/categories?error=1');
         exit;
     }
     CategoryCompiler::compile();
+    // Share text carries the hashtags, and category feeds follow the slug and the switch
+    require_once CORE_PATH . '/PostCompiler.php';
+    require_once CORE_PATH . '/FeedCompiler.php';
+    if ($id > 0 && ($before['hashtags'] ?? null) !== $hashtags) {
+        PostCompiler::refreshShareText($id);
+    }
+    FeedCompiler::compile($lang);
+    if ($before && $before['lang'] !== $lang) {
+        FeedCompiler::compile((string)$before['lang']);
+    }
     // A category name/slug change affects the category-listing FPC, so purge
     if ($slug !== '') {
         require_once CORE_PATH . '/CacheManager.php';
@@ -1174,6 +1359,10 @@ function handleAdminCategoryDelete(string $adminPath): void
 
     DB::execute('DELETE FROM categories WHERE id=?', [$catId]);
     CategoryCompiler::compile();
+    if ($cat) {
+        require_once CORE_PATH . '/FeedCompiler.php';
+        FeedCompiler::compile((string)$cat['lang']);   // drops the deleted category's feed files
+    }
 
     // Purge the category-listing FPC (all pages)
     if ($cat) {
@@ -1279,6 +1468,18 @@ function handleAdminUserSave(string $adminPath): void
         }
         header('Location: /' . $adminPath . '/users?saved=1');
     } catch (Exception $e) {
+        header('Location: /' . $adminPath . '/users?error=' . urlencode($e->getMessage()));
+    }
+    exit;
+}
+
+function handleAdminUserRole(string $adminPath): void
+{
+    Gate::authorize('user:manage');
+    try {
+        $n = AdminUserController::changeRole((int)($_POST['id'] ?? 0), (string)($_POST['role'] ?? ''), !empty($_POST['revoke_raw_html']));
+        header('Location: /' . $adminPath . '/users?saved=1&revoked=' . $n);
+    } catch (Throwable $e) {
         header('Location: /' . $adminPath . '/users?error=' . urlencode($e->getMessage()));
     }
     exit;
@@ -1596,6 +1797,10 @@ function handleAdminSeoSave(string $adminPath): void
         'default_keywords'     => trim($_POST['default_keywords']    ?? ''),
         'ga4_id'               => trim($_POST['ga4_id']              ?? ''),
         'search_console_token' => trim($_POST['search_console_token'] ?? ''),
+        'title_format'         => mb_substr(trim((string)($_POST['title_format'] ?? '')), 0, 100),
+        'slug_mode'            => in_array($_POST['slug_mode'] ?? '', ['title', 'datetime', 'id'], true) ? $_POST['slug_mode'] : 'title',
+        'publisher_logo'       => mb_substr(trim((string)($_POST['publisher_logo'] ?? '')), 0, 255),
+        'publish_slots'        => (function () { require_once CORE_PATH . '/PublishSlots.php'; return implode(', ', PublishSlots::parse((string)($_POST['publish_slots'] ?? ''))); })(),
     ];
     SeoCompiler::compile($config);
     SiteFileCompiler::writeRobots($_POST['robots'] ?? SiteFileCompiler::defaultRobots());
@@ -1673,6 +1878,10 @@ function handleAdminMaintenanceRun(string $adminPath): void
             require_once CORE_PATH . '/LinkCompiler.php';
             BlockCompiler::compile();
             LinkCompiler::compile();
+            require_once CORE_PATH . '/RedirectCompiler.php';
+            RedirectCompiler::compile();
+            require_once CORE_PATH . '/SpeakerCompiler.php';
+            SpeakerCompiler::compile();
 
             SeoCompiler::compile();
             SiteFileCompiler::compileSitemap(true);

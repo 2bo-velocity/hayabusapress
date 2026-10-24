@@ -52,7 +52,7 @@ match ($command) {
     'db:install'       => cmd_db_install(),
     'db:migrate'       => cmd_db_migrate(),
     'db:status'        => cmd_db_status(),
-    'posts:recompile'  => cmd_posts_recompile(),
+    'posts:recompile'  => cmd_posts_recompile(array_slice($argv, 2)),
     'authors:rebuild'  => cmd_authors_rebuild(),
     'cache:purge-category' => cmd_cache_purge_category($arg),
     'config:rebuild'   => cmd_config_rebuild(),
@@ -116,7 +116,10 @@ Usage:
   php core/cli.php lang:publish {locale}         Scaffold a new locale from the English master
   php core/cli.php assets:rebuild                Regenerate all caches after theme CSS/JS changes
   php core/cli.php authors:rebuild               Rebuild author singleton + purge FPC
-  php core/cli.php posts:recompile               Re-render Markdown + re-sanitize all posts
+  php core/cli.php posts:recompile [--reassess [--user=ID]]
+                                                 Re-render Markdown + re-sanitize all posts with the raw-HTML
+                                                 trust recorded on each. --reassess first resets that trust from
+                                                 the current role of whoever last saved the body (0 = Super User)
   php core/cli.php cache:purge-category {id}    Purge listing FPC for the given category
   php core/cli.php config:rebuild                Regenerate env.cache.php
   php core/cli.php media:gc [--days=N]           Collect orphan draft media (default 7 days)
@@ -224,6 +227,14 @@ function cmd_init(): void
     BlockCompiler::compile();
     LinkCompiler::compile();
     echo "  Block/LinkCompiler     [OK]\n";
+
+    require_once CORE_PATH . '/RedirectCompiler.php';
+    RedirectCompiler::compile();
+    echo "  RedirectCompiler       [OK]\n";
+
+    require_once CORE_PATH . '/SpeakerCompiler.php';
+    SpeakerCompiler::compile();
+    echo "  SpeakerCompiler        [OK]\n";
 
     SeoCompiler::compile();
     echo "  SeoCompiler            [OK]\n";
@@ -424,10 +435,10 @@ function cmd_seed_hello_world(PDO $pdo, string $driver): void
         "INSERT INTO posts
           (type, lang, slug, title, content_markdown, content_html, status, category_id,
            user_id, allow_comment, show_related_posts, show_share, show_author,
-           created_at, updated_at)
+           raw_html_allowed, content_saved_by, created_at, updated_at)
          VALUES
           ('post', ?, ?, 'Hello World!', ?, ?, 'published', ?,
-           NULL, TRUE, TRUE, TRUE, TRUE, ?, ?)"   // TRUE, not 1: PostgreSQL rejects an integer for a BOOLEAN column
+           NULL, TRUE, TRUE, TRUE, TRUE, TRUE, 0, ?, ?)"   // TRUE, not 1: PostgreSQL rejects an integer for a BOOLEAN column
     )->execute([$defaultLang, $slug, $markdown, $contentHtml, $catId, $now, $now]);
 
     echo "Created a sample post.\n";
@@ -576,34 +587,39 @@ function cmd_links_rebuild(): void
     echo "Rebuilt links.cache.php.\n";
 }
 
-function cmd_posts_recompile(): void
+function cmd_posts_recompile(array $args = []): void
 {
-    echo "Recompiling all posts (re-render Markdown + apply HtmlSanitizer)...\n";
-
-    require_once CORE_PATH . '/MarkdownCompiler.php';
-    require_once CORE_PATH . '/HtmlSanitizer.php';
+    require_once CORE_PATH . '/PostCompiler.php';
     require_once CORE_PATH . '/CacheManager.php';
 
-    // Re-render with the author's own raw_html permission, as the editor's save would.
-    // user_id NULL is the Super User, who bypasses the matrix.
-    $matrix  = require CORE_PATH . '/permissions.php';
-    $rawById = [];
-    foreach (DB::fetchAll('SELECT id, role FROM users') as $u) {
-        $rawById[(int)$u['id']] = !empty($matrix[(string)$u['role']]['post:raw_html']);
+    $reassess = in_array('--reassess', $args, true);
+    $user     = null;
+    foreach ($args as $a) {
+        if (str_starts_with($a, '--user=')) {
+            $v = substr($a, 7);
+            if (!ctype_digit($v)) {
+                fwrite(STDERR, "--user takes a numeric user id (0 = the Super User).\n");
+                exit(1);
+            }
+            $user = (int)$v;
+        }
+    }
+    if ($user !== null && !$reassess) {
+        fwrite(STDERR, "--user is only meaningful with --reassess.\n");
+        exit(1);
     }
 
-    $posts = DB::fetchAll('SELECT id, lang, content_markdown, user_id, show_toc, is_sponsored FROM posts');
-    $count = 0;
-    foreach ($posts as $post) {
-        $allowRaw    = $post['user_id'] === null || ($rawById[(int)$post['user_id']] ?? false);
-        $contentHtml = MarkdownCompiler::render($post['content_markdown'], $allowRaw, [
-            'toc'       => !empty($post['show_toc']),
-            'sponsored' => !empty($post['is_sponsored']),
-            'lang'      => (string)$post['lang'],
-        ]);
-        DB::execute('UPDATE posts SET content_html = ? WHERE id = ?', [$contentHtml, (int)$post['id']]);
-        $count++;
+    if ($reassess) {
+        $changed = PostCompiler::reassess($user);
+        echo 'Reassessed raw-HTML trust' . ($user !== null ? " for bodies last saved by user {$user}" : '')
+            . ': ' . count($changed) . " post(s) changed.\n";
     }
+
+    // Every post (not only the reassessed ones): this command is also how sanitizer and
+    // SPONSORED_NOTICE_TEXT changes reach stored HTML.
+    echo "Recompiling all posts (re-render Markdown + apply HtmlSanitizer)...\n";
+    $count = PostCompiler::recompile();
+    PostCompiler::refreshShareText();   // follows the refreshed descriptions
 
     // Purge all FPC (re-sanitization may change the content)
     CacheManager::purgeAll();

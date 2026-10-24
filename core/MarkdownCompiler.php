@@ -28,6 +28,17 @@ class MarkdownCompiler
     private const BLOCK_LINE  = '/^\{\{\s*block:([a-z0-9][a-z0-9-]{0,63})\s*\}\}$/';
     /** [[button:Label|URL|note]] on its own line (note optional). */
     private const BUTTON_LINE = '/^\[\[button:([^|\]]+)\|([^|\]]+)(?:\|([^\]]*))?\]\]$/u';
+    /** {{ card:slug }} on its own line: a card for another post of this site. */
+    private const CARD_LINE = '/^\{\{\s*card:([a-z0-9][a-z0-9-]{0,199})\s*\}\}$/';
+    /** ":::quote Source|URL", ":::box type Title", ":::say speaker" open a container closed by ":::". */
+    private const CONTAINER_OPEN = '/^:::(quote|box|say)(?:\s+(.*))?$/u';
+    /** Box types (anything else is "note"). */
+    public const BOX_TYPES = ['note', 'summary', 'warning', 'conclusion'];
+
+    /** Content language of the current render (cards and speakers are per language). */
+    private static string $lang = '';
+    /** Card slugs that did not resolve in the last render (for the editor's warning). */
+    private static array $missingCards = [];
 
     /** Heading IDs already used in the document being rendered (kept unique: -2, -3, ...). */
     private static array $usedIds = [];
@@ -48,7 +59,9 @@ class MarkdownCompiler
      */
     public static function render(string $markdown, bool $allowRawHtml = false, array $options = []): string
     {
-        self::$usedIds = [];
+        self::$usedIds      = [];
+        self::$missingCards = [];
+        self::$lang         = (string)($options['lang'] ?? '');
         // A stray delimiter in the source must not be able to forge a placeholder.
         $markdown = str_replace([self::TOKEN, "\x05"], '', $markdown);
         $lines = explode("\n", str_replace("\r\n", "\n", $markdown));
@@ -61,6 +74,7 @@ class MarkdownCompiler
 
         $html = self::resolveTokens($html);
         $html = self::linkRels($html, !empty($options['sponsored']));
+        $html = self::images($html);
         if (!empty($options['toc'])) {
             $html = self::insertToc($html, (string)($options['lang'] ?? ''));
         }
@@ -68,6 +82,12 @@ class MarkdownCompiler
             $html = self::sponsoredNotice((string)($options['lang'] ?? '')) . $html;
         }
         return $html;
+    }
+
+    /** Card slugs the last render() could not find among published posts. */
+    public static function missingCards(): array
+    {
+        return array_values(array_unique(self::$missingCards));
     }
 
     /** Backward compat: alias of render() (no permission check; for compatibility with existing code) */
@@ -103,6 +123,29 @@ class MarkdownCompiler
                 $html .= '<pre><code' . $langAttr . '>'
                     . htmlspecialchars(rtrim($code), ENT_QUOTES, 'UTF-8')
                     . "</code></pre>\n";
+                continue;
+            }
+
+            // --- Container (:::quote / :::box / :::say ... :::). One level: an inner ":::" closes it. ---
+            // The body is ordinary Markdown and is sanitized like everything else; only the wrapper,
+            // built from validated arguments, is added after sanitizing.
+            if (preg_match(self::CONTAINER_OPEN, trim($line), $m)) {
+                $inner = [];
+                $i++;
+                while ($i < $max && trim($lines[$i]) !== ':::') {
+                    $inner[] = $lines[$i];
+                    $i++;
+                }
+                $i++;   // the closing ":::"
+                $arg   = base64_encode(trim($m[2] ?? ''));
+                $html .= '<p>' . self::TOKEN . 'open:' . $m[1] . ':' . $arg . self::TOKEN . "</p>\n"
+                    . self::parseBlocks($inner, $allowRawHtml)
+                    . '<p>' . self::TOKEN . 'close:' . $m[1] . self::TOKEN . "</p>\n";
+                continue;
+            }
+            if (preg_match(self::CARD_LINE, trim($line), $m)) {
+                $html .= '<p>' . self::TOKEN . 'card:' . $m[1] . self::TOKEN . "</p>\n";
+                $i++;
                 continue;
             }
 
@@ -215,6 +258,10 @@ class MarkdownCompiler
                 if (preg_match('/^[-*_]{3,}\s*$/', $l)) break;
                 // Exactly the patterns handled above: a looser test would stop on a line nothing consumes.
                 if (preg_match(self::BLOCK_LINE, trim($l)) || preg_match(self::BUTTON_LINE, trim($l))) break;
+                if (preg_match(self::CARD_LINE, trim($l)) || preg_match(self::CONTAINER_OPEN, trim($l))) break;
+                // A stray ":::" (no container open) ends a paragraph but must still be consumed when it
+                // starts one, or the outer loop would see the same line forever.
+                if ($para !== '' && trim($l) === ':::') break;
                 $para .= ($para !== '' ? "\n" : '') . $l;
                 $i++;
             }
@@ -270,8 +317,143 @@ class MarkdownCompiler
             },
             $html
         );
-        // Anything left over (a placeholder the sanitizer moved) is dropped rather than shown.
+        $html = (string)preg_replace_callback(
+            '/<p>' . $t . 'card:([a-z0-9-]+)' . $t . '<\/p>/u',
+            static fn(array $m): string => self::card($m[1]),
+            $html
+        );
+        // Containers: open and close are resolved as a pair, so a lost half never leaves an unclosed tag
+        $html = (string)preg_replace_callback(
+            '/<p>' . $t . 'open:(quote|box|say):([A-Za-z0-9+\/=]*)' . $t . '<\/p>\n?(.*?)<p>' . $t . 'close:\1' . $t . '<\/p>/su',
+            static function (array $m): string {
+                [$open, $close] = self::container($m[1], (string)base64_decode($m[2]));
+                return $open . $m[3] . $close;
+            },
+            $html
+        );
+        // Anything left over (a placeholder the sanitizer moved, half a container) is dropped rather than shown.
+        $html = (string)preg_replace('/<p>' . $t . '[^' . $t . ']*' . $t . '<\/p>\n?/u', '', $html);
         return str_replace(self::TOKEN, '', $html);
+    }
+
+    /**
+     * Wrapper markup of a container. Every value placed in it is escaped or URL-checked here, because
+     * this runs after the sanitizer.
+     *
+     * @return array{0:string,1:string} [opening markup, closing markup]
+     */
+    private static function container(string $kind, string $arg): array
+    {
+        $e = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+        if ($kind === 'quote') {
+            [$source, $url] = array_pad(array_map('trim', explode('|', $arg, 2)), 2, '');
+            require_once CORE_PATH . '/SidebarCompiler.php';
+            $href    = $url !== '' ? SidebarCompiler::safeUrl($url, true) : '';
+            $citeAtt = $href !== '' ? ' cite="' . $e($href) . '"' : '';
+            $caption = '';
+            if ($source !== '') {
+                $name    = $href !== '' ? '<a href="' . $e($href) . '">' . $e($source) . '</a>' : $e($source);
+                $caption = '<figcaption>— <cite>' . $name . '</cite></figcaption>';
+            }
+            return ['<figure class="hbp-quote"><blockquote' . $citeAtt . '>', '</blockquote>' . $caption . '</figure>'];
+        }
+        if ($kind === 'box') {
+            $parts = preg_split('/\s+/u', $arg, 2) ?: [''];
+            $type  = in_array($parts[0], self::BOX_TYPES, true) ? $parts[0] : 'note';
+            $title = in_array($parts[0], self::BOX_TYPES, true) ? (string)($parts[1] ?? '') : $arg;
+            $head  = $title !== '' ? '<p class="hbp-box-title">' . $e($title) . '</p>' : '';
+            return ['<div class="hbp-box hbp-box-' . $type . '" role="note">' . $head, '</div>'];
+        }
+        // say: the speaker is looked up by slug (unknown slugs show the slug as the name)
+        $parts   = preg_split('/\s+/u', $arg) ?: [''];
+        $slug    = (string)$parts[0];
+        $speaker = self::speaker($slug);
+        $side    = in_array($parts[1] ?? '', ['left', 'right'], true) ? $parts[1] : ($speaker['side'] ?? 'left');
+        $name    = (string)($speaker['name'] ?? $slug);
+        $avatar  = (string)($speaker['avatar'] ?? '');
+        $img     = $avatar !== '' ? '<img src="' . $e($avatar) . '" alt="" width="56" height="56" loading="lazy">' : '';
+        return [
+            '<div class="hbp-say hbp-say-' . $side . '"><div class="hbp-say-who">' . $img . '<span>' . $e($name) . '</span></div><div class="hbp-say-body">',
+            '</div></div>',
+        ];
+    }
+
+    /** A registered speaker (SpeakerCompiler), or null. */
+    private static function speaker(string $slug): ?array
+    {
+        $file = STORAGE_PATH . '/cache/speakers.cache.php';
+        if (!is_file($file) && class_exists('DB') && is_file(CORE_PATH . '/SpeakerCompiler.php')) {
+            require_once CORE_PATH . '/SpeakerCompiler.php';
+            try { SpeakerCompiler::compile(); } catch (Throwable) { return null; }
+        }
+        $all = is_file($file) ? (@include $file) : [];
+        return is_array($all) ? ($all[$slug] ?? null) : null;
+    }
+
+    /**
+     * Card for a published post of this site, in the current render language. Baked into the post:
+     * the other post's later edits reach it on the next save or posts:recompile.
+     */
+    private static function card(string $slug): string
+    {
+        if (!class_exists('DB')) {
+            return '';
+        }
+        $lang = self::$lang !== '' ? self::$lang : (class_exists('Env') ? Env::get('SITE_DEFAULT_LANG', 'en') : 'en');
+        try {
+            $p = DB::fetchOne(
+                "SELECT type, lang, slug, title, meta_description, meta_description_auto, featured_image
+                   FROM posts WHERE slug = ? AND lang = ? AND status = 'published' AND deleted_at IS NULL
+                  ORDER BY CASE WHEN type = 'post' THEN 0 ELSE 1 END LIMIT 1",
+                [$slug, $lang]
+            );
+        } catch (Throwable) {
+            $p = null;
+        }
+        if (!$p) {
+            self::$missingCards[] = $slug;
+            return '';
+        }
+        $e      = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+        $prefix = (class_exists('Env') && $p['lang'] === Env::get('SITE_DEFAULT_LANG', 'en')) ? '' : '/' . $p['lang'];
+        $href   = $prefix . '/' . $p['type'] . '/' . $p['slug'];
+        $desc   = (string)($p['meta_description'] ?: ($p['meta_description_auto'] ?? ''));
+        $img    = (string)($p['featured_image'] ?? '');
+        return '<p class="hbp-card-wrap"><a class="hbp-card" href="' . $e($href) . '">'
+            . ($img !== '' ? '<img class="hbp-card-img" src="' . $e($img) . '" alt="" loading="lazy">' : '')
+            . '<span class="hbp-card-body"><span class="hbp-card-title">' . $e((string)$p['title']) . '</span>'
+            . ($desc !== '' ? '<span class="hbp-card-desc">' . $e(mb_strimwidth($desc, 0, 120, '…')) . '</span>' : '')
+            . '</span></a></p>';
+    }
+
+    /**
+     * Local article images get their real width/height (no layout shift while they load), and a WebP
+     * twin made at upload time ({file}.webp) is offered through <picture>. Runs after sanitizing on
+     * attribute values it reads from the files itself.
+     */
+    private static function images(string $html): string
+    {
+        if (!str_contains($html, '/assets/articles/') || !class_exists('Media')) {
+            return $html;
+        }
+        return (string)preg_replace_callback(
+            '#<img src="(/assets/articles/(?:[a-z0-9_]{2}/[a-z0-9_]{2}/)?([A-Za-z0-9._-]+))"([^>]*)>#',
+            static function (array $m): string {
+                $fn   = $m[2];
+                $path = is_file(Media::articlePath($fn)) ? Media::articlePath($fn) : Media::uploadPath($fn);
+                $tag  = $m[0];
+                if (!str_contains($m[3], ' width=') && is_file($path) && ($size = @getimagesize($path))) {
+                    $tag = '<img src="' . $m[1] . '"' . $m[3] . ' width="' . (int)$size[0] . '" height="' . (int)$size[1] . '">';
+                }
+                $webp = $fn . '.webp';
+                if (preg_match('/\.(jpe?g|png)$/i', $fn)
+                    && (is_file(Media::articlePath($webp)) || is_file(Media::uploadPath($webp)))) {
+                    $tag = '<picture><source srcset="' . htmlspecialchars(Media::articleUrl($webp), ENT_QUOTES, 'UTF-8') . '" type="image/webp">' . $tag . '</picture>';
+                }
+                return $tag;
+            },
+            $html
+        );
     }
 
     /**
