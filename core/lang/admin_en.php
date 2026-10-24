@@ -523,6 +523,7 @@ return [
 
     // --- installer (runs before .env exists) ---
     'install_env_write_failed'         => 'Failed to write .env. Check the write permission of the application directory.',
+    'install_invalid_field'            => 'This value cannot be used: :field (line breaks and control characters are not allowed; the site URL must start with http:// or https://, the database host may contain only letters, digits and . _ : - [ ], and the email must be valid).',
     'install_schema_failed'            => 'Failed to apply the schema (:count statement(s) failed).',
     'install_db_setup_failed'          => 'Database setup failed',
     'install_charset_warn_title'       => 'Database character set warning',

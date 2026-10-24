@@ -280,6 +280,10 @@ tailwind.config = { darkMode: 'class' };
         $siteName        = trim($_POST['site_name']        ?? 'HayabusaPress');
         $siteUrl         = rtrim(trim($_POST['site_url']   ?? ''), '/');
         $defaultLang     = preg_match('/^[a-z]{2,5}$/', $_POST['site_default_lang'] ?? '') ? $_POST['site_default_lang'] : 'en';
+        // Checked before the self-diagnosis below fetches it, and before it is written to .env
+        if ($siteUrl !== '' && !preg_match('#^https?://[^\s"\\\\<>]+$#i', $siteUrl)) {
+            self::rejectField('site_url');
+        }
 
         // ============================================================
         // public-URL self-diagnosis (proactive leak detection)
@@ -350,6 +354,30 @@ tailwind.config = { darkMode: 'class' };
         $monthFormats    = ['Y-m', 'Y/m', 'Y年m月', 'Y年n月'];
         $monthFormat     = in_array($_POST['archive_month_format'] ?? '', $monthFormats, true) ? $_POST['archive_month_format'] : 'Y-m';
 
+        // Values written into .env: a line break would start a new KEY=VALUE line (overriding settings
+        // that follow, e.g. ADMIN_IP_ALLOWLIST), so control characters are refused outright. Free-text
+        // values are then written double-quoted with \ and " escaped (see self::envQuote()).
+        $fields = [
+            'site_name'        => $siteName,
+            'site_url'         => $siteUrl,
+            'db_host'          => $dbHost,
+            'db_database'      => $dbDatabase,
+            'db_username'      => $dbUsername,
+            'db_password'      => $dbPassword,
+            'super_user_email' => $superEmail,
+        ];
+        foreach ($fields as $field => $value) {
+            if (preg_match('/[\x00-\x1F\x7F]/', $value)) {
+                self::rejectField($field);
+            }
+        }
+        if (!preg_match('/^[A-Za-z0-9._:\[\]-]+$/', $dbHost)) {
+            self::rejectField('db_host');
+        }
+        if (filter_var($superEmail, FILTER_VALIDATE_EMAIL) === false) {
+            self::rejectField('super_user_email');
+        }
+
         // Generate the password hash
         require_once __DIR__ . '/Hash.php';
         $passwordHash = Hash::make($_POST['password']);
@@ -361,8 +389,8 @@ tailwind.config = { darkMode: 'class' };
         // Generate .env (USE_DNS_BL -> DNSBL_ENABLED / APP_KEY added)
         $envContent = sprintf(
             <<<'ENV'
-SITE_NAME="%s"
-SITE_URL="%s"
+SITE_NAME=%s
+SITE_URL=%s
 SITE_DEFAULT_LANG="%s"
 SITE_CREDIT_LINK=true
 ADMIN_PATH="%s"
@@ -375,7 +403,7 @@ DB_PASSWORD=%s
 DB_CHARSET=
 PASSWORD_ALGO=bcrypt
 APP_KEY="%s"
-SUPER_USER_EMAIL="%s"
+SUPER_USER_EMAIL=%s
 SUPER_USER_PASSWORD_HASH="%s"
 SUPER_USER_NAME="Super User"
 SUPER_USER_LOCALE="%s"
@@ -423,9 +451,9 @@ SITE_IP_DENYLIST=""
 SESSION_DRIVER=database
 APP_ENV=production
 ENV,
-            $siteName, $siteUrl, $defaultLang, $adminPath,
-            $dbDriver, $dbHost, $dbPort, $dbDatabase, $dbUsername, $dbPassword,
-            $appKey, $superEmail, $passwordHash, $superLocale,
+            self::envQuote($siteName), self::envQuote($siteUrl), $defaultLang, $adminPath,
+            $dbDriver, self::envQuote($dbHost), $dbPort, self::envQuote($dbDatabase), self::envQuote($dbUsername), self::envQuote($dbPassword),
+            $appKey, self::envQuote($superEmail), $passwordHash, $superLocale,
             $antispamLevel, $dateFormat, $datetimeFormat, $monthFormat
         );
 
@@ -667,6 +695,23 @@ HTML;
     }
 
     /** One-line excerpt of a SQL statement, for error messages (never echo the whole DDL). */
+    /**
+     * A .env value in double quotes that Env::parseValue() reads back unchanged: \ and " are escaped,
+     * which also keeps a literal "\n" from being decoded as a line break. Control characters are
+     * refused before this is called.
+     */
+    private static function envQuote(string $value): string
+    {
+        return '"' . strtr($value, ['\\' => '\\\\', '"' => '\\"']) . '"';
+    }
+
+    /** Stop with 400 and name the field whose value cannot be written to .env. */
+    private static function rejectField(string $field): void   // never returns (PHP 8.0 has no `never`)
+    {
+        http_response_code(400);
+        exit(self::t('install_invalid_field', 'This value cannot be used: :field', ['field' => $field]));
+    }
+
     private static function stmtExcerpt(string $stmt): string
     {
         $one = trim(preg_replace('/\s+/', ' ', $stmt) ?? $stmt);

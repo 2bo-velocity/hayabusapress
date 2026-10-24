@@ -523,6 +523,7 @@ return [
 
     // --- installer (runs before .env exists) ---
     'install_env_write_failed'         => '.env の書き込みに失敗しました。アプリケーションディレクトリの書き込み権限を確認してください。',
+    'install_invalid_field'            => 'この値は使えません：:field（改行や制御文字は使えません。サイト URL は http:// か https:// で始め、データベースのホストには英数字と . _ : - [ ] だけを、メールアドレスには正しい形式を使ってください）。',
     'install_schema_failed'            => 'スキーマの適用に失敗しました（:count 件）。',
     'install_db_setup_failed'          => 'DB セットアップに失敗しました',
     'install_charset_warn_title'       => 'データベースの文字コードに注意',
