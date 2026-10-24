@@ -20,8 +20,24 @@ HBP のプラグインシステムは「マニフェスト駆動・静的フッ�
 plugins/
 └── your-plugin-name/
     ├── manifest.json   ← 必須。メタデータとフック宣言
-    └── plugin.php      ← フック実装（クラスベース）
+    ├── plugin.php      ← フック実装（クラスベース）
+    └── snippets/       ← 任意。公開ページに焼き込む静的HTML断片
 ```
+
+---
+
+## 拡張ポイント（6つ）
+
+プラグインが手を入れられるのは次の6か所だけ。これ以外にコアへ割り込む口は無い。
+
+| # | 拡張ポイント | 宣言 | できること |
+|---|---|---|---|
+| 1 | イベントフック | `hooks` | 下の「標準イベント」に割り込む |
+| 2 | 独自ルート | `routes` | 任意のURLを自分で描画する |
+| 3 | ページテンプレート | `page_template` ＋ `template_route` | 固定ページの本文を差し替える |
+| 4 | 専用テーブル | `database/install.{driver}.sql` | 有効化時に自分のテーブルを作る |
+| 5 | 言語パック | `lang/{code}.php` | `{plugin-id}.` 接頭辞つきのメッセージを辞書へ足す |
+| 6 | 静的ページ断片 | `snippets` | 公開ページの `<head>` 末尾と `</body>` 直前に固定のHTMLを置く |
 
 ---
 
@@ -63,6 +79,28 @@ plugins/
 | `hooks.*.class` | ◯ | クラス名 |
 | `hooks.*.method` | ◯ | スタティックメソッド名 |
 | `hooks.*.priority` | △ | 実行優先度（数値が小さいほど先に実行。デフォルト `10`） |
+| `snippets` | △ | 静的ページ断片（下記）。キーは `head` / `body_end` |
+
+---
+
+## 静的ページ断片（`snippets`）
+
+```json
+"snippets": {
+    "head":     "snippets/head.html",
+    "body_end": "snippets/body_end.html"
+}
+```
+
+- パスは**プラグインディレクトリからの相対**。ディレクトリの外を指すもの・存在しないもの・64 KiB を超えるものは警告を出して読み飛ばす。
+- 読むのは `plugins:rebuild`（有効化・無効化・削除を含む）のときだけ。有効なプラグインの断片をスロットごとにプラグイン ID 順で連結し、`storage/cache/plugin_snippets.cache.php` に書き出す。テーマがそれをページに出力し、FPC に焼き込まれるので、**閲覧時のコストはゼロ**。
+- 断片の中のインライン `<script>` / `<style>` は、rebuild のときにハッシュが CSP へ自動で足される。改行は LF に揃えて読む。`src` 付きの `<script>` で外部ホストを使うなら、運用者が `.env` の `CSP_SCRIPT_HOSTS` に足す必要がある。
+- 連結結果が変わったら、全ページのキャッシュと CSP は自動で作り直される。
+- **断片は静的。** PHP は実行されず、リクエストごとにも閲覧者ごとにも変わらない。閲覧者によって振る舞いを変えたいなら、断片の中のクライアント側 JS で行う。JS が動かない環境でもページが壊れないように書くこと。
+- `CSP_MODE=enforce` では `style="..."` 属性と `onclick` などのインラインハンドラは効かない。クラスと `addEventListener` を使う。
+- 断片はサニタイズされずに出力される。
+- テーマが `PluginManager::snippet('head')` / `PluginManager::snippet('body_end')` を出力していないと、断片は出ない（同梱テーマは出力している）。
+- 最小の例は `hbp-helloworld/snippets/head.html`（HTML コメントを1行置くだけ）。
 
 ---
 
@@ -108,6 +146,7 @@ class YourPluginClass
 |---|---|---|
 | `before_comment_create` | コメント受付コントローラーのDB接続前 | `post_data`, `ip_address` |
 | `before_contact_send` | お問い合わせプラグインのメール送出前 | `post_data`, `ip_address` |
+| `post_saved` | 記事・固定ページの保存の最後（DB確定・キャッシュ再生成の後）。遮断できない通知 | `post_id`, `type`, `lang`, `slug`, `status`, `is_new` |
 
 ---
 
@@ -156,6 +195,7 @@ class HbpMyPlugin { ... }
 
 管理画面の「プラグイン管理」からZIPファイルをアップロード。
 ZIPの構造は `your-plugin-name/manifest.json` が存在すること（パストラバーサル防御のため）。
+中に置けるファイルの拡張子は `php` `json` `md` `txt` `html` `css` `js` `svg` `png` `jpg` `webp` のみ。拡張子のないファイルは `LICENSE` `LICENCE` `COPYING` `NOTICE` `README` `CHANGELOG` `AUTHORS` の名前に限って置ける。
 
 ---
 
@@ -174,7 +214,7 @@ php core/cli.php plugins:rebuild
 
 | プラグイン | 説明 |
 |---|---|
-| `hbp-helloworld` | 最小構成のチュートリアルプラグイン（雛形として自由に流用可） |
+| `hbp-helloworld` | 最小構成のチュートリアルプラグイン（独自ルートと静的ページ断片の例。雛形として自由に流用可） |
 | `hbp-antispam` | 3層ハイブリッドスパム防御（ハニーポット / DNS-BL / 外部API） |
 | `hbp-contact` | DBクエリゼロのお問い合わせフォーム（MUI追従） |
 | `hbp-badwords` | NGワードフィルタ（事前コンパイル語彙・外部通信ゼロ） |

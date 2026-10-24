@@ -30,6 +30,9 @@ class CategoryCompiler
             "<?php\n// HBP Compiled Categories\nreturn {$export};\n",
             LOCK_EX
         );
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::CACHE_FILE, true);   // see SidebarCompiler::forgetCompiled()
+        }
     }
 
     public static function load(): array

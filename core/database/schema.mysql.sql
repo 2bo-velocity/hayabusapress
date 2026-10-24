@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
--- HayabusaPress (HBP) - MySQL 8.x Schema (HBP 1.0.0 / V001000000)
+-- HayabusaPress (HBP) - MySQL 8.x Schema (HBP 1.3.0 / V001003000)
 -- InnoDB / utf8mb4_unicode_ci
 --
 -- The complete, current form of the schema, used for new installs. The schema_migrations INSERT at
@@ -7,12 +7,13 @@
 -- self-contained: importing it directly through phpMyAdmin does not leave the admin reporting a
 -- schema version mismatch.
 --
--- 1.0.0 is the first release, so there are no incremental migrations: migrations/ is empty and the
--- definitions below are the whole schema. That includes the indexing work for large installations:
+-- The definitions below already include every migration in migrations/ (each is stamped as applied
+-- at the end of this file). Notable parts of the schema:
 --   1. Public search: ft_posts_title (FULLTEXT + the ngram parser; fails on MariaDB, which then
 --      falls back to LIKE)
 --   2. Denormalized listing keys on post_tags (type/lang/status/published_at + idx_post_tags_list)
 --   3. categories.post_count / tags.post_count counter columns
+--   4. Widget settings, theme layouts, reusable blocks and managed links (V001003000)
 
 SET NAMES utf8mb4;
 SET CHARACTER SET utf8mb4;
@@ -86,7 +87,10 @@ CREATE TABLE IF NOT EXISTS `posts` (
   `meta_keywords`        VARCHAR(255)  NULL DEFAULT NULL,
   `user_id`              INT UNSIGNED  NULL DEFAULT NULL COMMENT 'NULL means the Super User',
   `show_author`          TINYINT(1)    NOT NULL DEFAULT 1,
+  `show_toc`             TINYINT(1)    NOT NULL DEFAULT 0 COMMENT 'Bake a table of contents on save',
+  `is_sponsored`         TINYINT(1)    NOT NULL DEFAULT 0 COMMENT 'Sponsored-content notice + rel=sponsored on outbound links',
   `page_template`        VARCHAR(50)   NULL DEFAULT NULL COMMENT 'Plugin page-template ID',
+  `layout`               VARCHAR(50)   NULL DEFAULT NULL COMMENT 'Theme layout ID. NULL = default',
   `trans_group`          VARCHAR(36)   NULL DEFAULT NULL COMMENT 'Translation group key (UUID)',
   `hreflang_cache`       TEXT          NULL DEFAULT NULL COMMENT 'JSON cache of sibling-language URLs',
   `featured_image`       VARCHAR(255)  NULL DEFAULT NULL COMMENT 'Featured image, relative path. When NULL, falls back to the first body image, then the site logo (resolved on save)',
@@ -202,11 +206,42 @@ CREATE TABLE IF NOT EXISTS `navigation_menus` (
 CREATE TABLE IF NOT EXISTS `sidebar_widgets` (
   `id`               INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `sidebar_location` VARCHAR(30)  NOT NULL COMMENT 'sidebar_left|sidebar_right',
-  `widget_key`       VARCHAR(50)  NOT NULL COMMENT 'search|recent_comments|archive|categories|tags',
+  `widget_key`       VARCHAR(50)  NOT NULL COMMENT 'search|recent_comments|archive|categories|tags|recent_posts|posts_pick|text|image|html|menu',
+  `title`            VARCHAR(255) NULL DEFAULT NULL COMMENT 'Heading override. NULL = localized default',
+  `settings`         TEXT         NULL DEFAULT NULL COMMENT 'JSON. Shape depends on widget_key',
   `sort_order`       INT          NOT NULL DEFAULT 0,
   `created_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_location_sort` (`sidebar_location`, `sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- blocks (reusable content fragments, referenced from posts as {{ block:slug }})
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `blocks` (
+  `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `slug`       VARCHAR(64)  NOT NULL COMMENT '[a-z0-9-]',
+  `lang`       VARCHAR(5)   NOT NULL DEFAULT 'en' COMMENT 'Content language code',
+  `title`      VARCHAR(255) NOT NULL COMMENT 'Label shown in the admin only',
+  `body`       TEXT         NOT NULL COMMENT 'Markdown',
+  `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_blocks_slug_lang` (`slug`, `lang`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- links (managed outbound links, served as /go/{alias})
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `links` (
+  `id`         INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  `alias`      VARCHAR(64)   NOT NULL COMMENT '[a-z0-9-]',
+  `target_url` VARCHAR(2048) NOT NULL COMMENT 'https:// only',
+  `note`       VARCHAR(255)  NULL DEFAULT NULL COMMENT 'Admin-only memo',
+  `created_at` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_links_alias` (`alias`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -275,8 +310,7 @@ INSERT IGNORE INTO `navigation_menus` (`location`, `title`, `url`, `sort_order`)
 -- A version identifier is V + zero-padded major(3)+minor(3)+patch(3), a fixed width: 1.0.0 = V001000000.
 --
 -- First row = the baseline. The origin marker meaning "this database came from the full schema",
---   pinned to V001000000. In 1.0.0 it is the only row: being the first release, there is no earlier
---   version to upgrade from and therefore no incremental migration to record.
+--   pinned to V001000000.
 -- Later rows = migrations already folded into this file. The table definitions above are the current
 --   complete form, so the corresponding migrations must count as applied.
 -- The checksum 'BASELINE' is a sentinel meaning "arrived via the full schema, not applied
@@ -290,4 +324,5 @@ INSERT IGNORE INTO `navigation_menus` (`location`, `title`, `url`, `sort_order`)
 --   The highest version must match SCHEMA_VERSION in core/Schema.php.
 -- ============================================================
 INSERT IGNORE INTO `schema_migrations` (`version`, `name`, `checksum`, `applied_at`) VALUES
-  ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', NOW());
+  ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', NOW()),
+  ('V001003000', 'widgets_layouts_links',             'BASELINE', NOW());

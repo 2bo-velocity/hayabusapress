@@ -1,17 +1,18 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
--- HayabusaPress (HBP) - PostgreSQL 13-16 Schema (HBP 1.0.0 / V001000000)
+-- HayabusaPress (HBP) - PostgreSQL 13-16 Schema (HBP 1.3.0 / V001003000)
 --
 -- The complete, current form of the schema, used for new installs. The schema_migrations INSERT at
 -- the end of this file stamps the same version as SCHEMA_VERSION in core/Schema.php, so this file is
 -- self-contained: importing it directly through psql / pgAdmin does not leave the admin reporting a
 -- schema version mismatch.
 --
--- 1.0.0 is the first release, so there are no incremental migrations: migrations/ is empty and the
--- definitions below are the whole schema. That includes the indexing work for large installations:
+-- The definitions below already include every migration in migrations/ (each is stamped as applied
+-- at the end of this file). Notable parts of the schema:
 --   1. Public search: idx_posts_title_trgm (pg_trgm GIN, because the default parser cannot tokenize
 --      CJK)
 --   2. Denormalized listing keys on post_tags (type/lang/status/published_at + idx_post_tags_list)
 --   3. categories.post_count / tags.post_count counter columns
+--   4. Widget settings, theme layouts, reusable blocks and managed links (V001003000)
 --
 -- [IMPORTANT - CHARACTER ENCODING] This schema assumes a database whose encoding is UTF8.
 --   A PostgreSQL database's encoding is fixed at CREATE DATABASE time and cannot be changed
@@ -88,7 +89,10 @@ CREATE TABLE IF NOT EXISTS posts (
   meta_keywords        VARCHAR(255) NULL,
   user_id              INT          NULL REFERENCES users(id) ON DELETE RESTRICT,
   show_author          BOOLEAN      NOT NULL DEFAULT TRUE,
+  show_toc             BOOLEAN      NOT NULL DEFAULT FALSE,  -- Bake a table of contents on save
+  is_sponsored         BOOLEAN      NOT NULL DEFAULT FALSE,  -- Sponsored-content notice + rel=sponsored on outbound links
   page_template        VARCHAR(50)  NULL,
+  layout               VARCHAR(50)  NULL,        -- Theme layout ID. NULL = default
   trans_group          VARCHAR(36)  NULL,
   hreflang_cache       TEXT         NULL,
   featured_image       VARCHAR(255) NULL,        -- Featured image, relative path. When NULL, falls back to the first body image, then the site logo (resolved on save)
@@ -207,10 +211,40 @@ CREATE TABLE IF NOT EXISTS sidebar_widgets (
   id               INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   sidebar_location VARCHAR(30) NOT NULL,
   widget_key       VARCHAR(50) NOT NULL,
+  title            VARCHAR(255) NULL,          -- Heading override. NULL = localized default
+  settings         TEXT        NULL,           -- JSON. Shape depends on widget_key
   sort_order       INT         NOT NULL DEFAULT 0,
   created_at       TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_sidebar_widgets_location_sort ON sidebar_widgets (sidebar_location, sort_order);
+
+-- ============================================================
+-- blocks (reusable content fragments, referenced from posts as {{ block:slug }})
+-- No ON UPDATE in PostgreSQL: the application sets updated_at on every UPDATE.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS blocks (
+  id         INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  slug       VARCHAR(64)  NOT NULL,                  -- [a-z0-9-]
+  lang       VARCHAR(5)   NOT NULL DEFAULT 'en',     -- Content language code
+  title      VARCHAR(255) NOT NULL,                  -- Label shown in the admin only
+  body       TEXT         NOT NULL,                  -- Markdown
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uk_blocks_slug_lang UNIQUE (slug, lang)
+);
+
+-- ============================================================
+-- links (managed outbound links, served as /go/{alias})
+-- ============================================================
+CREATE TABLE IF NOT EXISTS links (
+  id         INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  alias      VARCHAR(64)   NOT NULL,                 -- [a-z0-9-]
+  target_url VARCHAR(2048) NOT NULL,                 -- https:// only
+  note       VARCHAR(255)  NULL,                     -- Admin-only memo
+  created_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uk_links_alias UNIQUE (alias)
+);
 
 -- ============================================================
 -- auth_throttle (rate limiting for login and 2FA)
@@ -294,8 +328,7 @@ INSERT INTO navigation_menus (location, title, url, sort_order)
 -- A version identifier is V + zero-padded major(3)+minor(3)+patch(3), a fixed width: 1.0.0 = V001000000.
 --
 -- First row = the baseline. The origin marker meaning "this database came from the full schema",
---   pinned to V001000000. In 1.0.0 it is the only row: being the first release, there is no earlier
---   version to upgrade from and therefore no incremental migration to record.
+--   pinned to V001000000.
 -- Later rows = migrations already folded into this file. The table definitions above are the current
 --   complete form, so the corresponding migrations must count as applied.
 -- The checksum 'BASELINE' is a sentinel meaning "arrived via the full schema, not applied
@@ -309,5 +342,6 @@ INSERT INTO navigation_menus (location, title, url, sort_order)
 --   The highest version must match SCHEMA_VERSION in core/Schema.php.
 -- ============================================================
 INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES
-  ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', CURRENT_TIMESTAMP)
+  ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', CURRENT_TIMESTAMP),
+  ('V001003000', 'widgets_layouts_links',             'BASELINE', CURRENT_TIMESTAMP)
   ON CONFLICT (version) DO NOTHING;

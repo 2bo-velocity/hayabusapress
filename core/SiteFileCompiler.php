@@ -289,6 +289,9 @@ class SiteFileCompiler
         $tmp = self::STATE_FILE . '.' . getmypid() . '.tmp';
         if (@file_put_contents($tmp, "<?php return " . var_export($state, true) . ";\n", LOCK_EX) !== false) {
             @rename($tmp, self::STATE_FILE);
+            if (function_exists('opcache_invalidate')) {
+                @opcache_invalidate(self::STATE_FILE, true);   // see SidebarCompiler::forgetCompiled()
+            }
         }
     }
 
@@ -316,6 +319,7 @@ class SiteFileCompiler
     {
         $siteUrl   = rtrim(class_exists('Env') ? Env::get('SITE_URL', '') : ($_ENV['SITE_URL'] ?? ''), '/');
         $adminPath = class_exists('Env') ? Env::get('ADMIN_PATH', 'admin') : ($_ENV['ADMIN_PATH'] ?? 'admin');
-        return "User-agent: *\nDisallow: /{$adminPath}/\nSitemap: {$siteUrl}/sitemap.xml\n";
+        // /go/ answers with redirects to partner sites: nothing there to index.
+        return "User-agent: *\nDisallow: /{$adminPath}/\nDisallow: /go/\nSitemap: {$siteUrl}/sitemap.xml\n";
     }
 }

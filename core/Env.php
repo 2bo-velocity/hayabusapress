@@ -156,5 +156,8 @@ class Env
         $tmp    = $path . '.' . getmypid() . '.tmp';
         file_put_contents($tmp, $php, LOCK_EX);
         rename($tmp, $path);
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($path, true);   // see SidebarCompiler::forgetCompiled()
+        }
     }
 }

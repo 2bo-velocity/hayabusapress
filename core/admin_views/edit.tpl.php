@@ -23,6 +23,11 @@ $selTags   = $selected_tags ?? [];
         {@ save_success @}
     </div>
     {% endif %}
+    {% if $_GET['sponsor_hint'] %}
+    <div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">
+        {@ sponsored_missing_hint @}
+    </div>
+    {% endif %}
 
     <!-- Title -->
     <div class="mb-4">
@@ -166,6 +171,21 @@ $selTags   = $selected_tags ?? [];
                     </select>
                 </div>
                 {% endif %}
+                <!-- Layout (offered only when the active theme declares more than the default) -->
+                {% if count($layouts ?? []) > 1 %}
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">{@ layout @}</label>
+                    <select name="layout" class="w-full text-sm px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+                        <?php foreach ($layouts ?? [] as $layoutId => $layoutLabel): ?>
+                        <option value="<?= htmlspecialchars((string)$layoutId, ENT_QUOTES, 'UTF-8') ?>"
+                            <?= ($post['layout'] ?? '') === $layoutId || (empty($post['layout']) && $layoutId === ThemeManager::DEFAULT_LAYOUT) ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($layoutLabel, ENT_QUOTES, 'UTF-8') ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="text-xs text-slate-400 mt-1">{@ layout_hint @}</p>
+                </div>
+                {% endif %}
                 <div>
                     <label class="block text-xs font-medium text-slate-500 mb-1">{@ content_language @}</label>
                     <select name="lang" class="w-full text-sm px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
@@ -220,6 +240,13 @@ $selTags   = $selected_tags ?? [];
                 <label class="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" name="show_share" value="1" {% if $post['show_share'] ?? true %}checked{% endif %}> {@ show_share @}
                 </label>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" name="show_toc" value="1" {% if $post['show_toc'] ?? false %}checked{% endif %}> {@ show_toc @}
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" name="is_sponsored" value="1" {% if $post['is_sponsored'] ?? false %}checked{% endif %}> {@ is_sponsored @}
+                </label>
+                <p class="text-xs text-slate-400">{@ is_sponsored_hint @}</p>
             </div>
 
             <!-- Translation group (hreflang linkage) -->
@@ -344,6 +371,11 @@ function switchTab(tab) {
         var fd = new URLSearchParams();
         fd.append('content_markdown', editor.value);
         fd.append('_csrf_token', csrfToken());
+        // The table of contents, the sponsored notice and blocks depend on these, as on save
+        var f = document.getElementById('editForm');
+        if (f.elements['show_toc'] && f.elements['show_toc'].checked) fd.append('show_toc', '1');
+        if (f.elements['is_sponsored'] && f.elements['is_sponsored'].checked) fd.append('is_sponsored', '1');
+        if (f.elements['lang']) fd.append('lang', f.elements['lang'].value);
         fetch('/' + adminPath + '/preview', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(d) { preview.innerHTML = d.success ? d.html : (msgError + ': ' + (d.message || '')); })

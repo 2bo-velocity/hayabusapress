@@ -189,6 +189,15 @@ class AdminPostController
             }
         }
 
+        // Layouts of the active theme (posts.layout). Only offered when the theme declares more than one.
+        $layouts = [];
+        if (class_exists('ThemeManager')) {
+            $uiLocale = class_exists('View') ? View::resolveCurrentLocale('admin/edit') : 'en';
+            foreach (ThemeManager::layouts() as $id => $def) {
+                $layouts[$id] = ThemeManager::layoutLabel($def, $uiLocale);
+            }
+        }
+
         return [
             // On new creation, return an empty array instead of null (so $post['x'] ?? '' works in templates and avoids warnings)
             'post'           => $post ?: [],
@@ -198,6 +207,7 @@ class AdminPostController
             'contentLocales' => class_exists('HbpLocale') ? HbpLocale::getAvailableContentLocales() : ['ja' => 'JA', 'en' => 'EN'],
             'defaultLang'    => Env::get('SITE_DEFAULT_LANG', 'en'),
             'pageTemplates'  => $pageTemplates,
+            'layouts'        => $layouts,
             'attachments'    => $attachments,
             'titleMax'       => self::TITLE_MAX,
         ];
@@ -284,6 +294,8 @@ class AdminPostController
         $showRelatedPosts = isset($input['show_related_posts']) ? 1 : 0;
         $showShare        = isset($input['show_share'])         ? 1 : 0;
         $showAuthor       = isset($input['show_author'])        ? 1 : 0;
+        $showToc          = isset($input['show_toc'])           ? 1 : 0;
+        $isSponsored      = isset($input['is_sponsored'])       ? 1 : 0;
         $metaDescription  = trim($input['meta_description'] ?? '');
         $metaKeywords     = trim($input['meta_keywords'] ?? '');
         // page_template must name an ENABLED page-template plugin. Accepting it unchecked would
@@ -293,6 +305,10 @@ class AdminPostController
         $pageTemplate = $type === 'page' && !empty($input['page_template'])
             ? self::validatePageTemplate(trim($input['page_template']))
             : null;
+
+        // layout: an ID declared by the active theme, or NULL for its default. An unknown value is
+        // dropped rather than stored, like page_template (posts.layout is VARCHAR(50)).
+        $layout = self::validateLayout(trim((string)($input['layout'] ?? '')));
 
         // featured image (resolve the fallback once at save time and bake it)
         $featuredImage = self::resolveFeaturedImage(trim($input['featured_image'] ?? ''), $markdown);
@@ -315,7 +331,12 @@ class AdminPostController
 
         // Markdown -> HTML compile (per-role raw_html decision + HtmlSanitizer)
         $allowRawHtml = Auth::isSuperUser() || Gate::can('post:raw_html');
-        $contentHtml  = MarkdownCompiler::render($markdown, $allowRawHtml);
+        // The table of contents and the sponsored notice are baked here too (options of the same pass)
+        $contentHtml  = MarkdownCompiler::render($markdown, $allowRawHtml, [
+            'toc'       => (bool)$showToc,
+            'sponsored' => (bool)$isSponsored,
+            'lang'      => $lang,
+        ]);
 
         // Author ID (NULL for Super User)
         $userId = Auth::id() === 0 ? null : Auth::id();
@@ -352,15 +373,15 @@ class AdminPostController
                  (type, lang, slug, title, content_markdown, content_html, status, category_id,
                   tags_cache, allow_comment, show_related_posts,
                   show_share, meta_description, meta_keywords,
-                  user_id, show_author, page_template, trans_group,
+                  user_id, show_author, show_toc, is_sponsored, page_template, layout, trans_group,
                   featured_image, featured_image_alt,
                   comment_count, published_at, created_at, updated_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)',
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)',
                 [
                     $type, $lang, $slug, $title, $markdown, $contentHtml, $status, $catId,
                     $tagsCache, $allowComment, $showRelatedPosts,
                     $showShare, $metaDescription, $metaKeywords,
-                    $userId, $showAuthor, $pageTemplate, $transGroup ?: null,
+                    $userId, $showAuthor, $showToc, $isSponsored, $pageTemplate, $layout, $transGroup ?: null,
                     $featuredImage, $featuredAlt,
                     $publishedAt, $now, $now,
                 ]
@@ -388,14 +409,14 @@ class AdminPostController
                    type=?, lang=?, slug=?, title=?, content_markdown=?, content_html=?, status=?,
                    category_id=?, tags_cache=?, allow_comment=?, show_related_posts=?,
                    show_share=?, meta_description=?, meta_keywords=?,
-                   show_author=?, page_template=?, trans_group=?,
+                   show_author=?, show_toc=?, is_sponsored=?, page_template=?, layout=?, trans_group=?,
                    featured_image=?, featured_image_alt=?, published_at=?, updated_at=?
                  WHERE id=?',
                 [
                     $type, $lang, $slug, $title, $markdown, $contentHtml, $status,
                     $catId, $tagsCache, $allowComment, $showRelatedPosts,
                     $showShare, $metaDescription, $metaKeywords,
-                    $showAuthor, $pageTemplate, $transGroup ?: null,
+                    $showAuthor, $showToc, $isSponsored, $pageTemplate, $layout, $transGroup ?: null,
                     $featuredImage, $featuredAlt, $publishedAt, $now, $postId,
                 ]
             );
@@ -464,8 +485,11 @@ class AdminPostController
         CategoryCompiler::compile();
         TagCompiler::compile();
         SidebarCompiler::compileArchiveWidget($lang);
-        SidebarCompiler::compileLayout('sidebar_right', $lang);
-        SidebarCompiler::compileLayout('sidebar_left', $lang);
+        // Every cached page embeds the widget areas (recent posts, category counts, ...): when the
+        // save changed them, the pinpoint purge above is not enough.
+        if (SidebarCompiler::compileAllLayouts($lang)) {
+            CacheManager::purgeAll();
+        }
         SiteFileCompiler::compileSitemap();
 
         // regenerate feeds (only when the post type's publish/unpublish changes)
@@ -641,8 +665,9 @@ class AdminPostController
         $lang = $post['lang'] ?? '';
         if ($lang !== '') {
             SidebarCompiler::compileArchiveWidget($lang);
-            SidebarCompiler::compileLayout('sidebar_right', $lang);
-            SidebarCompiler::compileLayout('sidebar_left', $lang);
+            if (SidebarCompiler::compileAllLayouts($lang)) {
+                CacheManager::purgeAll();
+            }
         }
         SiteFileCompiler::compileSitemap();
 
@@ -725,6 +750,9 @@ class AdminPostController
 
         CategoryCompiler::compile();
         SidebarCompiler::compileArchiveWidget($post['lang'] ?? '');
+        if (SidebarCompiler::compileAllLayouts($post['lang'] ?? '')) {
+            CacheManager::purgeAll();
+        }
         SiteFileCompiler::compileSitemap();
 
         // regenerate feeds when a post (post type) is deleted
@@ -999,6 +1027,15 @@ class AdminPostController
         // auto-swaps only files remaining in storage/upload to the management delivery URL, so it does not 404.
         // return post_id (the front end adopts the auto-generated draft thereafter).
         return ['url' => Media::articleUrl($filename), 'filename' => $filename, 'post_id' => $postId];
+    }
+
+    /** Resolve a submitted layout ID against the active theme. NULL = the theme's default layout. */
+    private static function validateLayout(string $id): ?string
+    {
+        if ($id === '' || !class_exists('ThemeManager') || $id === ThemeManager::DEFAULT_LAYOUT) {
+            return null;
+        }
+        return isset(ThemeManager::layouts()[$id]) ? $id : null;
     }
 
     /**

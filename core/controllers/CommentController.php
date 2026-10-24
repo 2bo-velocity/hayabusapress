@@ -92,7 +92,7 @@ class CommentController
 
         // ---- Stage 4: double lock (type='post' AND allow_comment=1 AND status='published') ----
         $target = DB::fetchOne(
-            "SELECT id FROM posts WHERE id = ? AND type = 'post' AND allow_comment = 1 AND status = 'published' LIMIT 1",
+            "SELECT id FROM posts WHERE id = ? AND type = 'post' AND allow_comment = TRUE AND status = 'published' LIMIT 1",
             [$postId]
         );
         if (!$target) {

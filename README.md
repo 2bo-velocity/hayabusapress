@@ -43,6 +43,13 @@ Every design decision answers one question: *can we pre-compute this so the fron
 | **Split-pane Markdown editor** | Separate title/body inputs; plain-text body (no in-place rich conversion) with a side-by-side live preview sharing the server-side `MarkdownCompiler`. Drag-and-drop image upload, autosave, ruby/emphasis toolbar. |
 | **Attachment list & delete** | A thumbnail list of the editing content's attachments (`attachments` rows) below the body field. Insert any image into the body at the cursor, or **physically delete** it (confirmation required; warning is strengthened if the file is still referenced in the body). The body `![]()` is **never auto-rewritten** (you remove broken links yourself). Delete API needs `media:manage` + CSRF; own content only without `post:edit_other`. |
 | **Character count** | Live character count at the top-left of the title and body fields, counted by **code point** (`[...str].length` — CJK and half-width each count as 1). Title has a hard 255-char cap warning (caution past 230); body shows a soft length guide (light / standard / comprehensive). Client-side only — zero server or FPC impact. |
+| **Widgets & areas** | 11 widget types (search, recent comments, archive, categories, tags, recent posts, hand-picked posts, Markdown text, image banner, raw HTML, menu) placed in 6 areas: right/left sidebar, below the header, before/after the body, and the footer. Each widget can take its own title. All compiled to per-area, per-language HTML at save time — an empty area emits nothing. |
+| **Per-post layouts** | A theme declares its layouts in `theme.json` (which areas each one shows, plus a `<body>` class); the editor offers them as a select. The bundled theme ships *Standard*, *Single column* and *Minimal*. |
+| **Table of contents** | Per-post toggle. Built from H2/H3 at save time and inserted before the first H2 (needs at least two H2s). Heading ids are de-duplicated. |
+| **Reusable blocks** | Write a block once in **Admin → Blocks**, place it in any post with a line `{{ block:slug }}`. Posts keep only a marker; the block is expanded when the page cache is written, so editing a block updates every post that uses it immediately — no re-save. |
+| **Buttons** | A line `[[button:Label\|URL\|note]]` renders a call-to-action button with an optional note above it. Unsafe URL schemes are dropped. |
+| **Managed links (`/go/`)** | Register `alias → https://…` in **Admin → Links** and link to `/go/alias`. Served as a 302 from a compiled array — no DB query, no page cache. Only registered `https://` targets; responses carry `X-Robots-Tag: noindex, nofollow`, and the generated `robots.txt` disallows `/go/`. |
+| **Sponsored disclosure** | Per-post "contains promotional content" toggle: a notice is printed at the top of the body (text configurable via `SPONSORED_NOTICE_TEXT`) and external links get `rel="sponsored"`. Links to `/go/` always carry `rel="sponsored nofollow"`. |
 | **Featured image / OGP** | `posts.featured_image` + `featured_image_alt`. Set via the right-side drawer; fallback chain (post's first image → site logo) resolved **at save time** and baked — zero runtime body scan. Drives `og:image`. |
 | **Responsive & fluid typography** | Theme guideline: reader-side body column ~720px, `clamp()` 16→18px; admin-side liquid full-width, labels 14px, **inputs ≥16px** (prevents iOS zoom). |
 | **Physical media isolation** | Draft media lives in `storage/upload/` (web-inaccessible). Moved to `public/assets/articles/` atomically on publish, and **moved back on unpublish**. |
@@ -53,9 +60,9 @@ Every design decision answers one question: *can we pre-compute this so the fron
 | **Email-optional comments** | Comments require only name + body; **email and website are optional** (`comments.author_email` is nullable). HBP ships no reply-notification mail and no external Gravatar, so it never collects email it cannot use. Commenter avatars are a **bundled SVG silhouette** (`public/assets/site/avatar-default.svg`, `fill="currentColor"` to track the theme) — zero external requests. Per-content acceptance is the `posts.allow_comment` toggle in the editor's right drawer. |
 | **Comment moderation filters** | The comment admin shares the content-list design (PC filter bar + table, mobile card list, pagination). Filter by status (with count badges), **created-date range**, name / email / website (`LIKE`), and linked content (`post_id`, reached from the content list). The comment **body is intentionally not searchable** (long-text = index-inefficient). No new indexes — `status`/date narrow via `idx_status_created`, `post_id` via `idx_comments_post`. No bulk actions; delete still requires confirmation. Needs `comment:moderate`. |
 | **Super User** | Highest-privilege admin authenticated via `.env` only — never stored in DB. A DB wipe cannot lock you out. |
-| **Role-based access control** | Static RBAC matrix (`permissions.php`, zero DB queries). 4 staff roles (Administrator / Editor / Author / Contributor) + Super User, mapped across 15 fine-grained permissions (posts, comments, media, taxonomy, navigation, maintenance, IP, plugins, themes, users, settings). |
+| **Role-based access control** | Static RBAC matrix (`permissions.php`, zero DB queries). 4 staff roles (Administrator / Editor / Author / Contributor) + Super User, mapped across 17 fine-grained permissions (posts, comments, media, taxonomy, navigation, blocks, links, maintenance, IP, plugins, themes, users, settings). |
 | **Native TOTP 2FA** | RFC 6238-compliant. Replay prevention (`tfa_last_step`), 5-strike session destruction, time-step reuse detection. |
-| **Manifest-based plugins** | `manifest.json` declares hooks. Hook registry pre-compiled and priority-sorted. No full plugin load per request. |
+| **Manifest-based plugins** | `manifest.json` declares hooks. Hook registry pre-compiled and priority-sorted. No full plugin load per request. Static HTML snippets for `<head>` and the end of `<body>` are baked into the page cache — zero runtime cost. |
 | **zip-slip-safe installer** | `PluginInstaller` validates every ZIP entry, blocks symlinks + zip-bombs, optionally enforces Ed25519 signatures. |
 | **Dual IP blocklist** | `blocked_ips` table blocks POST-type spam. `SITE_IP_DENYLIST` blocks page views via compiled array — zero DB hit. |
 | **Atom 1.0 + RSS 2.0 feeds** | Pre-compiled per-language feeds (`feed.atom.xml`, `feed.rss.xml`). Generated at post publish — zero DB on serving. Autodiscovery `<link>` in every `<head>`. |
@@ -128,11 +135,8 @@ php core/cli.php db:install && php core/cli.php system:init && php core/cli.php 
 
 ### Option C — Upgrade an existing installation
 
-**1.0.0 is the first public release, so there is nothing to upgrade from yet.** `core/database/migrations/`
-is empty and `db:migrate` reports nothing pending. Use Option A or B for a fresh install.
-
-Once 1.0.0 is out, releases that change the schema ship a forward-only migration, and the procedure
-is this:
+Releases that change the schema ship a forward-only migration in `core/database/migrations/`
+(see [Diff migrations](#diff-migrations)). The procedure is the same for every release:
 
 ```bash
 # 1. Back up the database and files first
@@ -315,7 +319,7 @@ See `deploy/README-shared-hosting.md` for step-by-step instructions.
 | `tool:key` | Generate a `base64:`-encoded `APP_KEY` for HMAC and encryption |
 | `tool:hash "pw"` | Generate a bcrypt/argon2id hash for `SUPER_USER_PASSWORD_HASH` |
 | `db:install` | **New installs.** Apply `schema.{driver}.sql` (full schema + seed) whose trailing baseline INSERT records `V001000000` — the DB is immediately "up to date" |
-| `db:migrate` | **Upgrades (post-release).** Apply only `V…` not yet in `schema_migrations`, ascending, forward-only; record each with real SHA-256 |
+| `db:migrate` | **Upgrades.** Apply only `V…` not yet in `schema_migrations`, ascending, forward-only; record each with real SHA-256 |
 | `db:status` | Report: **DB version vs. `SCHEMA_VERSION` (code) vs. driver**, list pending migrations + the command to run, verify checksums (skips `BASELINE`) |
 
 ### Cache & Build
@@ -327,7 +331,9 @@ See `deploy/README-shared-hosting.md` for step-by-step instructions.
 | `lang:rebuild [locale]` | Delete MUI view caches for a locale (or all locales) to force re-bake |
 | `assets:rebuild` | Purge all FPC + view caches + recompile CSP hashes after theme CSS/JS edits |
 | `authors:rebuild` | Rebuild `authors.cache.php` + purge affected post FPCs |
-| `posts:recompile` | Re-run Markdown → HTML + sanitizer on all posts (use after updating sanitizer rules) |
+| `posts:recompile` | Re-run Markdown → HTML + sanitizer on all posts (use after updating sanitizer rules or `SPONSORED_NOTICE_TEXT`) |
+| `blocks:rebuild` | Recompile `blocks.cache.php` (reusable blocks) and purge all FPC |
+| `links:rebuild` | Recompile `links.cache.php` (the `/go/` alias table) |
 | `media:gc [--days=N]` | Garbage-collect orphan draft media in `storage/upload/` not referenced by any `attachments` row, older than N days (default 7). Walks the `{ab}/{cd}/` shard tree |
 | `media:reshard [--dry-run]` | Migrate an existing flat media layout into the `{ab}/{cd}/` two-level shards: move files, rewrite body/featured-image public URLs flat→shard, then regenerate search index, list FPC, sitemap & feeds. Idempotent |
 | `cache:purge-category {id}` | Purge FPC for all posts in a category (precision cleanup) |
@@ -479,7 +485,9 @@ Each capability is a permission key checked via `Gate::can('post:publish')`. `�
 | `comment:moderate` | Approve / spam / delete comments | ✅ | ✅ | ❌ | ❌ |
 | `media:manage` | Upload / delete media | ✅ | ✅ | ✅ (own) | ❌ |
 | `taxonomy:manage` | Create / edit / delete categories & tags | ✅ | ✅ | ❌ | ❌ |
-| `nav:manage` | Edit navigation menus & sidebar widgets | ✅ | ❌ | ❌ | ❌ |
+| `nav:manage` | Edit navigation menus & widgets (a raw-HTML widget also needs `post:raw_html`) | ✅ | ❌ | ❌ | ❌ |
+| `blocks:manage` | Create / edit / delete reusable blocks | ✅ | ❌ | ❌ | ❌ |
+| `links:manage` | Manage `/go/` links | ✅ | ❌ | ❌ | ❌ |
 | `maintenance:run` | Rebuild caches/sitemap/feeds (Admin → Maintenance) | ✅ | ❌ | ❌ | ❌ |
 | `ip:manage` | Manage admin allowlist & public blocklists (A/B) | ✅ | ❌ | ❌ | ❌ |
 | `plugin:manage` | Install / enable / disable / delete plugins | ✅ | ❌ | ❌ | ❌ |
@@ -535,7 +543,9 @@ hayabusapress/
 │   ├── TranslationCompiler.php # hreflang_cache sync for translation groups
 │   ├── SecurityHeaderCompiler.php  # CSP + HSTS + auxiliary headers (pre-compiled)
 │   ├── MenuCompiler.php        # 6-location navigation HTML compiler
-│   ├── SidebarCompiler.php     # Sidebar widget HTML compiler (per-language)
+│   ├── SidebarCompiler.php     # Widget HTML compiler (6 areas, per-language)
+│   ├── BlockCompiler.php       # Reusable blocks → blocks.cache.php, expanded when the FPC is written
+│   ├── LinkCompiler.php        # /go/{alias} → links.cache.php, served as a 302 without a DB query
 │   ├── CommentCompiler.php     # Approved comment cache + FPC + sidebar sync
 │   ├── SeoCompiler.php         # SEO/analytics tag compiler
 │   ├── SiteFileCompiler.php    # sitemap.xml (index + split) / robots.txt generator
@@ -552,7 +562,7 @@ hayabusapress/
 │   ├── Installer.php           # Embedded installer (hidden; activates only when .env missing)
 │   ├── AdminPostController.php # Post save orchestrator
 │   ├── AdminUserController.php # Staff + 2FA management
-│   ├── permissions.php         # Static RBAC matrix (15 permissions × 4 roles)
+│   ├── permissions.php         # Static RBAC matrix (17 permissions × 4 roles)
 │   ├── cli.php                 # CLI entry point
 │   │
 │   ├── controllers/
@@ -581,6 +591,8 @@ hayabusapress/
 │   │   ├── comments.tpl.php
 │   │   ├── menu.tpl.php
 │   │   ├── sidebar.tpl.php
+│   │   ├── blocks.tpl.php
+│   │   ├── links.tpl.php
 │   │   ├── categories.tpl.php
 │   │   ├── tags.tpl.php
 │   │   ├── plugins.tpl.php
@@ -631,6 +643,9 @@ hayabusapress/
 │       ├── sidebar_{location}_{lang}.cache.php
 │       ├── widget_archive_{lang}.cache.php
 │       ├── widget_comments_{lang}.cache.php
+│       ├── blocks.cache.php        # Reusable blocks
+│       ├── links.cache.php         # /go/ alias table
+│       ├── plugin_snippets.cache.php
 │       ├── pages/                  # FPC: {lang}_{type}_{slug}.html (+ _p{n} variants)
 │       │   └── .locks/             # Stampede lock files
 │       └── views/                  # MUI-baked view caches
@@ -673,18 +688,19 @@ Versions are `V` + zero-padded **major(3)·minor(3)·patch(3)** = a fixed-width 
 | 1.2.5 | `V001002005` |
 | 2.0.0 | `V002000000` |
 
-#### The baseline: full schema, fixed at 1.0.0
+#### The baseline: full schema, floor fixed at 1.0.0
 
-**1.0.0 ships the full schema files (`schema.mysql.sql` / `schema.pgsql.sql`) and no diff migrations**, because it is the first release and there is no earlier version to migrate a database from. The baseline is fixed at **`V001000000` (version 1.0.0)**. Each full schema file ends with a **baseline INSERT** that records this row:
+The full schema files (`schema.mysql.sql` / `schema.pgsql.sql`) always describe the **current** schema — every diff migration is folded into them as well. The floor is fixed at **`V001000000` (version 1.0.0)**, the first release. Each full schema file ends with a **baseline INSERT** that records the floor **and every diff the file already contains**:
 
 ```sql
 -- end of schema.{driver}.sql
 INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
-  VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>);
+  VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>),
+         ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>);
 ```
 
 - `checksum = 'BASELINE'` is a sentinel meaning "this row came from a full schema, not a diff migration" — checksum verification skips `BASELINE` rows.
-- Because `db:install` applies the full schema **including this INSERT**, a fresh database immediately reports itself as `V001000000` = fully up to date. `db:migrate` then correctly finds **nothing pending** (it will never try to re-add existing columns).
+- Because `db:install` applies the full schema **including this INSERT**, a fresh database immediately reports itself as the current version (`V001003000`) = fully up to date. `db:migrate` then correctly finds **nothing pending** (it will never try to re-add existing columns).
 
 #### The three guarantees
 
@@ -694,11 +710,18 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | **`SCHEMA_VERSION` constant** (`core/Schema.php`) | The version the *code* expects. Startup/CLI compares it with the latest applied row and warns on mismatch (code vs. DB drift). |
 | **`db:status` report** | Prints DB version, code-expected version, driver, and any pending migrations with the exact command to run — answers "how far do I need to migrate?" at a glance. |
 
-#### Diff migrations, from 1.0.1 onward
+<a id="diff-migrations"></a>
+#### Diff migrations
 
-When a release changes the schema, diff files are added under `migrations/` named **`V<major><minor><patch>__description.<driver>.sql`** (e.g. `V001001000__add_x.mysql.sql`), applied in ascending `V…` order, forward-only. `db:migrate` applies any `V…` not present in `schema_migrations`, recording each with the file's real SHA-256 (so later tampering is detectable). The fixed `V001000000` baseline remains the floor.
+When a release changes the schema, diff files are added under `migrations/` named **`V<major><minor><patch>__description.<driver>.sql`** (e.g. `V001003000__widgets_layouts_links.mysql.sql`), applied in ascending `V…` order, forward-only. `db:migrate` applies any `V…` not present in `schema_migrations`, recording each with the file's real SHA-256 (so later tampering is detectable). The fixed `V001000000` baseline remains the floor.
 
-> This stays within HBP's constitution: pure PHP + PDO, raw SQL, zero external tooling (no Flyway/Liquibase). The full schema files remain the canonical install path during pre-release.
+The full schema files always describe the latest version and record every diff as a `BASELINE` row, so a fresh install never replays them.
+
+| Version | Migration | Changes |
+|---|---|---|
+| 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`; `posts.layout` / `show_toc` / `is_sponsored`; new tables `blocks` and `links` |
+
+> This stays within HBP's constitution: pure PHP + PDO, raw SQL, zero external tooling (no Flyway/Liquibase).
 
 ### Tables
 
@@ -713,10 +736,12 @@ When a release changes the schema, diff files are added under `migrations/` name
 | 7 | `sessions` | DB-backed session storage |
 | 8 | `comments` | Comments with approval workflow (`author_email` nullable — optional since) |
 | 9 | `navigation_menus` | Navigation items for 6 locations |
-| 10 | `sidebar_widgets` | Sidebar widget configuration |
+| 10 | `sidebar_widgets` | Widget configuration: area, order, optional `title`, per-type `settings` (JSON) |
 | 11 | `auth_throttle` | Login / 2FA rate limiting |
 | 12 | `blocked_ips` | POST-type spam IP blocklist |
 | 13 | `schema_migrations` | Migration tracking with checksum verification |
+| 14 | `blocks` | Reusable content blocks (`slug` + `lang` unique, Markdown body) |
+| 15 | `links` | Managed outbound links (`alias` unique → `target_url`) |
 
 ### Key `posts` columns
 
@@ -732,6 +757,9 @@ When a release changes the schema, diff files are added under `migrations/` name
 | `hreflang_cache` | JSON of sibling URLs, baked at save time |
 | `featured_image` | Featured image relative path. `NULL` → fallback (first body image → site logo) resolved **at save time**; drives `og:image` |
 | `featured_image_alt` | Featured image alt text (a11y/SEO) |
+| `layout` | Theme layout id (`NULL` = the theme's default; unknown ids fall back to it) |
+| `show_toc` | Insert a table of contents at save time |
+| `is_sponsored` | Print the sponsored disclosure and mark external links `rel="sponsored"` |
 | `user_id` | `NULL` = Super User. `ON DELETE RESTRICT` — reassignment required before staff deletion |
 
 > Index `idx_posts_schedule (status, published_at)` drives the `WHERE status='scheduled' AND published_at <= NOW()` lookup; all list indexes sort by `published_at DESC`.
@@ -760,7 +788,7 @@ When a release changes the schema, diff files are added under `migrations/` name
 | Draft media leakage | `storage/upload/` — web server denies all access; PHP-mediated delivery only. Uploads follow the same isolation + `media:manage` gate. **Unpublishing moves media back to `storage/upload/`** so non-public posts' media is never web-reachable |
 | `.env` leakage (shared hosting) | Method B (app outside web root) / Method A (`.htaccess`) + bootstrap self-defense + installer self-diagnosis |
 | XML-RPC attacks | File does not exist — not a single line of code |
-| Privilege escalation | Static RBAC (`Gate::can()`, `permissions.php`) — 15 permissions × 4 roles; ownership-scoped checks; Super User via `.env` only |
+| Privilege escalation | Static RBAC (`Gate::can()`, `permissions.php`) — 17 permissions × 4 roles; ownership-scoped checks; Super User via `.env` only |
 | Super User DB exposure | Super User is `.env`-only; DB compromise cannot yield root credentials |
 
 ### Content Security Policy
@@ -778,6 +806,16 @@ After theme CSS/JS changes:
 ```bash
 php core/cli.php assets:rebuild   # recomputes SHA-256 hashes + purges FPC
 ```
+
+Off-site sources are opt-in, comma-separated host lists (malformed entries are ignored with a warning in the error log):
+
+```ini
+CSP_IMG_HOSTS="pics.example.com,*.cdn.example.net"   # img-src — e.g. partner banners
+CSP_SCRIPT_HOSTS=""                                  # script-src for <script src>; keep empty unless needed
+EMBED_HOSTS="www.youtube-nocookie.com,player.vimeo.com"  # frame-src
+```
+
+Inline `<script>` / `<style>` bodies in plugin snippets and raw-HTML widgets are hashed automatically when they are compiled — nothing to list by hand. **Inline `style="…"` attributes are not covered by hashes and are blocked under `enforce`**, so themes and snippets should use classes instead.
 
 ### Admin Panel CSS (Production)
 
@@ -815,6 +853,27 @@ Without this file, the admin panel falls back to Tailwind Play CDN (development 
 }
 ```
 
+### Static Snippets
+
+A plugin can add fixed HTML to the `<head>` or the end of `<body>` on every public page:
+
+```json
+"snippets": {
+  "head": "snippets/head.html",
+  "body_end": "snippets/body_end.html"
+}
+```
+
+The files are read once at `plugins:rebuild` (64 KiB per file, must stay inside the plugin directory) and baked into the page cache — no PHP runs per request. Inline `<script>` / `<style>` inside a snippet is added to the CSP hashes automatically.
+
+Themes must print the slots and the widget areas themselves:
+
+```php
+<?php echo PluginManager::snippet('head'); ?>        <!-- just before </head> -->
+<?php echo PluginManager::snippet('body_end'); ?>    <!-- just before </body> -->
+{{{ SidebarCompiler::areaFor('content_before', $lang ?? '', $layout ?? null) }}}
+```
+
 ### The 3 Rules
 
 1. **No runtime I/O scans** — `glob()` / `scandir()` must not run per request. All discovery happens at compile time (`plugins:rebuild`).
@@ -849,6 +908,7 @@ class MyPlugin
 |---|---|
 | `before_comment_create` | Comment controller, before DB insert |
 | `before_contact_send` | Contact form plugin, before `mb_send_mail()` |
+| `post_saved` | End of a post/page save, after every cache is rebuilt (notification only — cannot cancel the save) |
 
 ### Bundled Plugins
 

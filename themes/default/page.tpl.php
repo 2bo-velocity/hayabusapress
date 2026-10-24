@@ -13,9 +13,13 @@
     </figure>
     {% endif %}
 
+    {{{ SidebarCompiler::areaFor('content_before', $lang ?? '', $layout ?? null) }}}
+
     <div class="hbp-content">
         {{{ $post['content_html'] }}}
     </div>
+
+    {{{ SidebarCompiler::areaFor('content_after', $lang ?? '', $layout ?? null) }}}
 
     {% if $post['show_share'] %}
     <?php

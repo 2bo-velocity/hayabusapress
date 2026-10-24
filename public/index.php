@@ -125,6 +125,13 @@ if (isset($cfg['special'][$uri])) {
     exit;
 }
 
+// (1b) Managed links /go/{alias}: a 302 from a compiled array (language-independent, no DB, no FPC)
+if (str_starts_with($uri, '/go/')) {
+    require_once CORE_PATH . '/LinkCompiler.php';
+    LinkCompiler::serve(substr($uri, 4));
+    exit;
+}
+
 // (1): AUTO_LANG_REDIRECT — automatic Accept-Language 302 only on the root /
 // Default false for SEO safety. Enabling it may hinder reaching all language versions
 if ($uri === '/' && Env::bool('AUTO_LANG_REDIRECT', false)) {
@@ -329,7 +336,11 @@ function handleDetail(array $resolve, array $common, ?string $fpcKey): void
 
     $canonical = buildCanonical($resolve, (string)($common['siteUrl'] ?? ''), (string)($common['defaultLang'] ?? ''));
 
-    $data     = array_merge($common, compact('post', 'comments', 'seoMeta', 'sidebarRight', 'sidebarLeft', 'canonical'));
+    // The theme layout this post asked for (falls back to the theme's default). Listings leave
+    // $layout unset, which the templates read as the default layout.
+    $layout = ThemeManager::layout(isset($post['layout']) && $post['layout'] !== '' ? (string)$post['layout'] : null);
+
+    $data     = array_merge($common, compact('post', 'comments', 'seoMeta', 'sidebarRight', 'sidebarLeft', 'canonical', 'layout'));
     $viewName = $type === 'post' ? 'post' : 'page';
 
     renderWithFpc($fpcKey, $viewName, $data);
@@ -798,7 +809,7 @@ function renderWithFpc(?string $fpcKey, string $viewName, array $data): void
             }
             ob_start();
             View::render($viewName, $data);
-            $html = (string)ob_get_clean();
+            $html = expandBlocks((string)ob_get_clean());
 
             // Atomic write (temp->rename)
             CacheManager::ensureDirFor($fpcFile);
@@ -825,11 +836,22 @@ function renderWithFpc(?string $fpcKey, string $viewName, array $data): void
             // On timeout, generate it ourselves
             ob_start();
             View::render($viewName, $data);
-            $html = (string)ob_get_clean();
-            echo $html;
+            echo expandBlocks((string)ob_get_clean());
         }
     } else {
+        ob_start();
         View::render($viewName, $data);
+        echo expandBlocks((string)ob_get_clean());
     }
     exit;
+}
+
+/** Replace reusable-block markers ({{ block:slug }}) in a generated page; see BlockCompiler. */
+function expandBlocks(string $html): string
+{
+    if (!str_contains($html, '<!--hbp:block:')) {
+        return $html;
+    }
+    require_once CORE_PATH . '/BlockCompiler.php';
+    return BlockCompiler::expand($html, defined('CURRENT_LANG') ? CURRENT_LANG : '');
 }

@@ -73,6 +73,9 @@ class ViewCompiler
         $compiled = self::compileMui($compiled, $viewName, $locale);
 
         file_put_contents($cachePath, $compiled, LOCK_EX);
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($cachePath, true);   // see SidebarCompiler::forgetCompiled()
+        }
 
         return $cachePath;
     }

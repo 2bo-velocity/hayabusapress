@@ -31,6 +31,9 @@ class TagCompiler
             "<?php\n// HBP Compiled Tags\nreturn {$export};\n",
             LOCK_EX
         );
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::CACHE_FILE, true);   // see SidebarCompiler::forgetCompiled()
+        }
     }
 
     public static function load(): array

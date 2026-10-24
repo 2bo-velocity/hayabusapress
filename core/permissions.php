@@ -1,6 +1,6 @@
 <?php
 /**
- * HayabusaPress - Static RBAC matrix (14 permissions x 4 roles).
+ * HayabusaPress - Static RBAC matrix (17 permissions x 4 roles).
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  * Licensed under the GNU AGPL v3 or later, with the HayabusaPress Plugin & Theme Exception
@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 
-// static RBAC matrix — 14 permissions x 4 roles (Super User bypasses the matrix via .env only).
+// static RBAC matrix — 17 permissions x 4 roles (Super User bypasses the matrix via .env only).
 //   The ownership scope (own) is resolved by the caller checking posts.user_id / attachment ownership.
 //   The matrix holds only per-role allow/deny; zero DB queries at check time.
 //   Spec: matches the permission matrix in docs/hayabusapress/hayabusapress-spec-v1.0.md "Roles and permissions".
@@ -24,6 +24,8 @@ return [
         'media:manage'     => true,
         'taxonomy:manage'  => true,   // Create/edit/delete categories & tags
         'nav:manage'       => true,   // Nav menus & sidebar widgets
+        'blocks:manage'    => true,   // Reusable content blocks ({{ block:slug }})
+        'links:manage'     => true,   // Managed outbound links (/go/{alias})
         'maintenance:run'  => true,   // Rebuild cache/sitemap/feeds
         'ip:manage'        => true,   // Admin allowlist & public blocklist
         'plugin:manage'    => true,
@@ -41,6 +43,8 @@ return [
         'media:manage'     => true,
         'taxonomy:manage'  => true,
         'nav:manage'       => false,
+        'blocks:manage'    => false,
+        'links:manage'     => false,
         'maintenance:run'  => false,
         'ip:manage'        => false,
         'plugin:manage'    => false,
@@ -58,6 +62,8 @@ return [
         'media:manage'     => true,   // (own)
         'taxonomy:manage'  => false,
         'nav:manage'       => false,
+        'blocks:manage'    => false,
+        'links:manage'     => false,
         'maintenance:run'  => false,
         'ip:manage'        => false,
         'plugin:manage'    => false,
@@ -75,6 +81,8 @@ return [
         'media:manage'     => false,
         'taxonomy:manage'  => false,
         'nav:manage'       => false,
+        'blocks:manage'    => false,
+        'links:manage'     => false,
         'maintenance:run'  => false,
         'ip:manage'        => false,
         'plugin:manage'    => false,

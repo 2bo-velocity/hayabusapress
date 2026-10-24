@@ -156,6 +156,9 @@ class Scheduler
         $tmp  = self::CACHE_FILE . '.' . getmypid() . '.tmp';
         file_put_contents($tmp, $php, LOCK_EX);
         rename($tmp, self::CACHE_FILE);
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::CACHE_FILE, true);   // see SidebarCompiler::forgetCompiled()
+        }
     }
 
     // ----------------------------------------------------------------
@@ -197,9 +200,12 @@ class Scheduler
             FeedCompiler::compile($lang);
         }
 
-        // Update the sidebar archive widget
+        // Update the sidebar archive widget, then the widget areas that embed it
         if (class_exists('SidebarCompiler')) {
             SidebarCompiler::compileArchiveWidget($lang);
+            if (SidebarCompiler::compileAllLayouts($lang) && class_exists('CacheManager')) {
+                CacheManager::purgeAll();
+            }
         }
 
         // hreflang sync via TranslationCompiler

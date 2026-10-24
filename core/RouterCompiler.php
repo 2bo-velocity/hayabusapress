@@ -102,6 +102,9 @@ class RouterCompiler
         $tmp    = self::CACHE_FILE . '.' . getmypid() . '.tmp';
         file_put_contents($tmp, $php, LOCK_EX);
         rename($tmp, self::CACHE_FILE);
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::CACHE_FILE, true);   // see SidebarCompiler::forgetCompiled()
+        }
     }
 
     /** Load the cache (auto-compile if missing = Auto-Healing). */

@@ -10,7 +10,7 @@
             {% if $post['status'] === 'scheduled' %}<span class="hbp-scheduled-badge">{@ scheduled @}</span>{% endif %}
             {% if $post['author']['name'] %}<span itemprop="author">{{ $post['author']['name'] }}</span>{% endif %}
             {% if $post['comment_count'] > 0 %}
-            <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg> {{ $post['comment_count'] }}</span>
+            <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="hbp-icon-inline"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg> {{ $post['comment_count'] }}</span>
             {% endif %}
         </div>
 
@@ -33,9 +33,13 @@
     {% endif %}
 
     <!-- Body (HTML compiled at save time; zero front-end Markdown conversion cost) -->
+    {{{ SidebarCompiler::areaFor('content_before', $lang ?? '', $layout ?? null) }}}
+
     <div class="hbp-content" itemprop="articleBody">
         {{{ $post['content_html'] }}}
     </div>
+
+    {{{ SidebarCompiler::areaFor('content_after', $lang ?? '', $layout ?? null) }}}
 
     <!-- Social share -->
     {% if $post['show_share'] %}
@@ -142,7 +146,7 @@
         <form method="post" action="/comment_post" class="hbp-comment-form">
             <input type="hidden" name="post_id" value="{{ $post['id'] }}">
             <!-- Honeypot (spam-bot defense) -->
-            <input type="text" name="honey_pot_email" style="display:none" tabindex="-1" autocomplete="off">
+            <input type="text" name="honey_pot_email" hidden tabindex="-1" autocomplete="off" aria-hidden="true">
 
             <div class="hbp-form-group">
                 <label>{@ comment_author @}</label>

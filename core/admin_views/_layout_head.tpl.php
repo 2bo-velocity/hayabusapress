@@ -70,6 +70,20 @@ tailwind.config = { darkMode: 'class' };
             {@ sidebar @}
         </a>
         {% endif %}
+        {% if Gate::can('blocks:manage') %}
+        <a href="/{{ $adminPath }}/blocks"
+           class="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1" stroke-width="2"/></svg>
+            {@ blocks @}
+        </a>
+        {% endif %}
+        {% if Gate::can('links:manage') %}
+        <a href="/{{ $adminPath }}/links"
+           class="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+            {@ links @}
+        </a>
+        {% endif %}
         {% if Gate::can('taxonomy:manage') %}
         <a href="/{{ $adminPath }}/categories"
            class="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors">

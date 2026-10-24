@@ -42,6 +42,9 @@ class CommentCompiler
                 "<?php\n// HBP Compiled Comments for Post #{$postId}\nreturn {$export};\n",
                 LOCK_EX
             );
+            if (function_exists('opcache_invalidate')) {
+                @opcache_invalidate($cacheFile, true);   // see SidebarCompiler::forgetCompiled()
+            }
         }
 
         // Precise purge of the target post (linked to the dependency graph)
@@ -62,8 +65,11 @@ class CommentCompiler
                 $tagSlugs    = array_column($decodedTags, 'slug');
             }
             CacheManager::purgePost($post, $tagSlugs, $catSlug);
-            // Recompile the recent-comments widget too
+            // Recompile the recent-comments widget, then the areas that embed it
             SidebarCompiler::compileRecentCommentsWidget($post['lang'] ?? '');
+            if (SidebarCompiler::compileAllLayouts($post['lang'] ?? '')) {
+                CacheManager::purgeAll();
+            }
         }
     }
 

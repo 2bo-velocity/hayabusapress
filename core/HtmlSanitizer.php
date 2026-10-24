@@ -95,35 +95,57 @@ class HtmlSanitizer
         return $result;
     }
 
+    /** Elements removed together with their content (unwrapping them would leak code as text). */
+    private const DROP_WITH_CONTENT = ['script', 'style', 'template', 'noscript'];
+
     private static function sanitizeNode(
         DOMNode $node,
         DOMDocument $doc,
         bool $allowEmbed,
         array $embedHosts
     ): void {
-        $toRemove = [];
+        // Walk the children by sibling pointers rather than foreach over the live childNodes list:
+        // unwrapping or removing a node while iterating that list skips the node after it, which let
+        // e.g. <script></script><img onerror=...> through unsanitized.
+        $child = $node->firstChild;
+        while ($child !== null) {
+            $next = $child->nextSibling;
 
-        foreach ($node->childNodes as $child) {
             if ($child->nodeType === XML_TEXT_NODE) {
+                $child = $next;
                 continue;
             }
             if ($child->nodeType !== XML_ELEMENT_NODE) {
-                $toRemove[] = $child;
+                $node->removeChild($child);
+                $child = $next;
                 continue;
             }
             /** @var DOMElement $child */
             $tag = strtolower($child->tagName);
 
-            // Tags not in the allowlist -> promote child nodes to the parent and remove
+            if (in_array($tag, self::DROP_WITH_CONTENT, true)) {
+                $node->removeChild($child);
+                $child = $next;
+                continue;
+            }
+
+            // Tags not in the allowlist -> promote child nodes to the parent and remove. The promoted
+            // nodes are visited next (they have not been sanitized yet).
             if (!in_array($tag, self::ALLOWED_TAGS, true)) {
-                self::unwrap($child, $doc);
+                $first = $child->firstChild;
+                while ($child->firstChild !== null) {
+                    $node->insertBefore($child->firstChild, $child);
+                }
+                $node->removeChild($child);
+                $child = $first ?? $next;
                 continue;
             }
 
             // iframe: embedding not allowed, or host validation
             if ($tag === 'iframe') {
                 if (!$allowEmbed || !self::isAllowedEmbed($child->getAttribute('src'), $embedHosts)) {
-                    $toRemove[] = $child;
+                    $node->removeChild($child);
+                    $child = $next;
                     continue;
                 }
             }
@@ -133,12 +155,7 @@ class HtmlSanitizer
 
             // Recurse
             self::sanitizeNode($child, $doc, $allowEmbed, $embedHosts);
-        }
-
-        foreach ($toRemove as $n) {
-            if ($n->parentNode) {
-                $n->parentNode->removeChild($n);
-            }
+            $child = $next;
         }
     }
 
@@ -184,9 +201,12 @@ class HtmlSanitizer
                 }
                 continue;
             }
-            // Check URL attributes for dangerous schemes
+            // Check URL attributes for dangerous schemes. Browsers ignore leading/trailing spaces and
+            // control characters and drop tabs/newlines anywhere in a URL, so " javascript:" and
+            // "java\tscript:" both run: strip those before reading the scheme.
             if (in_array($name, ['href', 'src', 'action'], true)) {
-                $scheme = strtolower(explode(':', $value, 2)[0] ?? '');
+                $normalized = (string)preg_replace('/[\x00-\x20\x7f]+/', '', $value);
+                $scheme     = strtolower(explode(':', $normalized, 2)[0] ?? '');
                 if (in_array($scheme, self::DANGEROUS_SCHEMES, true)) {
                     $toRemove[] = $name;
                     continue;
@@ -197,22 +217,6 @@ class HtmlSanitizer
         foreach ($toRemove as $name) {
             $el->removeAttribute($name);
         }
-    }
-
-    private static function unwrap(DOMElement $el, DOMDocument $doc): void
-    {
-        $parent = $el->parentNode;
-        if (!$parent) {
-            return;
-        }
-        $children = [];
-        foreach ($el->childNodes as $child) {
-            $children[] = $child;
-        }
-        foreach ($children as $child) {
-            $parent->insertBefore($doc->importNode($child, true), $el);
-        }
-        $parent->removeChild($el);
     }
 
     private static function isAllowedEmbed(string $src, array $embedHosts): bool
@@ -229,13 +233,14 @@ class HtmlSanitizer
         return false;
     }
 
-    /** Simple sanitization for environments without ext-dom (strip all tags). */
+    /**
+     * Fallback for environments without ext-dom: strip all tags. Attribute-level filtering cannot be
+     * done safely with regular expressions (unquoted handlers, javascript: URLs, ...), so formatting
+     * is given up rather than risking script injection. ext-dom is enabled in standard PHP builds.
+     */
     private static function simpleSanitize(string $html): string
     {
-        // Remove dangerous tags and escape
-        $html = preg_replace('/<script\b[^>]*>.*?<\/script>/is', '', $html);
-        $html = preg_replace('/<style\b[^>]*>.*?<\/style>/is', '', $html);
-        $html = preg_replace('/\bon\w+\s*=\s*["\'][^"\']*["\']/i', '', $html);
-        return $html;
+        $html = (string)preg_replace('#<(script|style|template|noscript)\b[^>]*>.*?</\1\s*>#is', '', $html);
+        return htmlspecialchars(strip_tags($html), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8', false);
     }
 }

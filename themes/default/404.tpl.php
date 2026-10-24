@@ -6,12 +6,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>404 Not Found — {{ $siteName }}</title>
 <link rel="stylesheet" href="{{ ThemeManager::assetBase() }}/style.css">
+<?php echo PluginManager::snippet('head'); ?>
 </head>
 <body>
-<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:2rem;">
-    <h1 style="font-size:4rem;font-weight:bold;color:#e2e8f0;margin:0;">404</h1>
-    <p style="color:#64748b;margin:.5rem 0 1.5rem;">{@ not_found @}</p>
-    <a href="/" style="color:#10b981;text-decoration:underline;">{@ back_to_top @}</a>
+<div class="hbp-404">
+    <h1 class="hbp-404-code">404</h1>
+    <p class="hbp-404-text">{@ not_found @}</p>
+    <a href="/" class="hbp-404-link">{@ back_to_top @}</a>
 </div>
+<?php echo PluginManager::snippet('body_end'); ?>
 </body>
 </html>

@@ -391,6 +391,9 @@ DNSBL_TIMEOUT_MS=300
 DNSBL_ON_HIT="moderate"
 EXTERNAL_SPAM_API_KEY=""
 CSP_MODE=report-only
+CSP_IMG_HOSTS=""
+CSP_SCRIPT_HOSTS=""
+SPONSORED_NOTICE_TEXT=""
 AUTO_LANG_REDIRECT=false
 EMBED_HOSTS="www.youtube-nocookie.com,player.vimeo.com"
 LIST_PAGE_SIZE=10
@@ -528,8 +531,7 @@ ENV,
         foreach ($contentLocales as $lCode => $lLabel) {
             SidebarCompiler::compileRecentCommentsWidget($lCode);
             SidebarCompiler::compileArchiveWidget($lCode);
-            SidebarCompiler::compileLayout('sidebar_left',  $lCode);
-            SidebarCompiler::compileLayout('sidebar_right', $lCode);
+            SidebarCompiler::compileAllLayouts($lCode);
         }
 
         // Create the sample "Hello World" post (only on first install)

@@ -21,7 +21,7 @@ $langPrefix = ($lang === $defaultLang) ? '' : "/{$lang}";
             <time>{{ Format::date($post['published_at']) }}</time>
             {% if $post['author']['name'] %}<span>{{ $post['author']['name'] }}</span>{% endif %}
             {% if $post['comment_count'] > 0 %}
-            <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg> {{ $post['comment_count'] }}</span>
+            <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="hbp-icon-inline"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg> {{ $post['comment_count'] }}</span>
             {% endif %}
         </div>
         <div class="hbp-post-excerpt">

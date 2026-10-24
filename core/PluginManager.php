@@ -13,6 +13,10 @@ declare(strict_types=1);
  *
  * manifest.json declares metadata + hooks. rebuildCache() precompiles
  * plugins.cache.php (the master registry) and hooks.cache.php (the sorted hook map).
+ *
+ * Static page snippets ("snippets": {"head": ..., "body_end": ...}) are concatenated into
+ * plugin_snippets.cache.php at the same time. Themes print them with snippet(), so they are baked
+ * into the full-page cache and cost nothing per request.
  */
 class PluginManager
 {
@@ -23,6 +27,15 @@ class PluginManager
     private const PLUGINS_DIR    = ROOT_PATH    . '/plugins';
     /** Compiled plugin catalogs, one file per locale: plugin_lang_{code}.cache.php */
     private const LANG_CACHE_FMT = STORAGE_PATH . '/cache/plugin_lang_%s.cache.php';
+    /** Concatenated static page snippets of enabled plugins. Also read by SecurityHeaderCompiler. */
+    public const SNIPPETS_CACHE  = STORAGE_PATH . '/cache/plugin_snippets.cache.php';
+    /** Where a snippet may be printed. The theme decides the exact position. */
+    public const SNIPPET_SLOTS   = ['head', 'body_end'];
+    /** Upper bound per snippet file: a snippet is a fragment, not a page. */
+    private const SNIPPET_MAX_BYTES = 65536;
+
+    /** @var array<string,string>|null request-local memo for snippet() */
+    private static ?array $snippets = null;
 
     // ----------------------------------------------------------------
     // Public API
@@ -38,6 +51,7 @@ class PluginManager
         $plugins      = [];
         $hooks        = [];
         $pluginRoutes = [];
+        $snippets     = array_fill_keys(self::SNIPPET_SLOTS, []);
 
         $dirs = glob(self::PLUGINS_DIR . '/*/manifest.json') ?: [];
 
@@ -65,6 +79,7 @@ class PluginManager
                 'hooks'         => $meta['hooks']          ?? [],
                 'routes'        => $meta['routes']         ?? [],
                 'page_template' => $meta['page_template']  ?? null,
+                'snippets'      => $meta['snippets']       ?? [],
             ];
 
             // Compile only enabled plugins
@@ -121,6 +136,17 @@ class PluginManager
                     }
                 }
             }
+
+            // Static page snippets (read now, so nothing is touched at request time)
+            foreach ((array)($meta['snippets'] ?? []) as $slot => $relFile) {
+                if (!isset($snippets[$slot]) || !is_string($relFile)) {
+                    continue;
+                }
+                $html = self::readSnippet($dir, $relFile);
+                if ($html !== null) {
+                    $snippets[$slot][] = $html;
+                }
+            }
         }
 
         // Sort each event's hooks by ascending priority
@@ -136,6 +162,9 @@ class PluginManager
             "<?php\n// HBP Plugin Registry - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n",
             LOCK_EX
         );
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::PLUGINS_CACHE, true);   // see SidebarCompiler::forgetCompiled()
+        }
 
         // hooks.cache.php (sorted static hook registry: for runtime)
         $export = var_export($hooks, true);
@@ -144,6 +173,9 @@ class PluginManager
             "<?php\n// HBP Hook Registry - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n",
             LOCK_EX
         );
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::HOOKS_CACHE, true);   // see SidebarCompiler::forgetCompiled()
+        }
 
         // plugin_routes.cache.php (static plugin routes + template route definitions)
         $export = var_export($pluginRoutes, true);
@@ -152,8 +184,92 @@ class PluginManager
             "<?php\n// HBP Plugin Routes - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n",
             LOCK_EX
         );
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::ROUTES_CACHE, true);   // see SidebarCompiler::forgetCompiled()
+        }
 
+        self::compileSnippets($snippets);
         self::compileLanguagePacks($active);
+    }
+
+    /**
+     * Static page snippet for a slot ('head' / 'body_end'), for themes to print.
+     *
+     * Called while a page is rendered, which on the public side means only when the full-page cache
+     * is generated: the result is baked into the cached HTML. Auto-Healing if the cache is missing.
+     */
+    public static function snippet(string $slot): string
+    {
+        if (self::$snippets === null) {
+            if (!is_file(self::SNIPPETS_CACHE)) {
+                self::rebuildCache();
+            }
+            $data = is_file(self::SNIPPETS_CACHE) ? require self::SNIPPETS_CACHE : [];
+            self::$snippets = is_array($data) ? $data : [];
+        }
+        return self::$snippets[$slot] ?? '';
+    }
+
+    /**
+     * Read one snippet file declared in a manifest. Returns null (and logs) when the path leaves the
+     * plugin directory, the file is missing, or it is too large.
+     *
+     * Line endings are normalized to LF: the browser hashes an inline script after the HTML parser
+     * has done the same, so a CRLF file would otherwise never match its CSP hash.
+     */
+    private static function readSnippet(string $pluginDir, string $relFile): ?string
+    {
+        $base = realpath($pluginDir);
+        $path = realpath($pluginDir . '/' . ltrim($relFile, '/'));
+        if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR) || !is_file($path)) {
+            error_log("[HBP WARNING] plugin snippet '{$relFile}' in " . basename($pluginDir) . ' is missing or outside the plugin directory -- skipped.');
+            return null;
+        }
+        if (filesize($path) > self::SNIPPET_MAX_BYTES) {
+            error_log("[HBP WARNING] plugin snippet '{$relFile}' in " . basename($pluginDir) . ' exceeds ' . self::SNIPPET_MAX_BYTES . ' bytes -- skipped.');
+            return null;
+        }
+        $html = file_get_contents($path);
+        if ($html === false) {
+            return null;
+        }
+        return trim(str_replace(["\r\n", "\r"], "\n", $html));
+    }
+
+    /**
+     * Write plugin_snippets.cache.php. When the output changed, every cached page carries the old
+     * snippets and the CSP carries the old hashes, so both are refreshed here.
+     *
+     * @param array<string,string[]> $bySlot snippets per slot, in plugin directory order
+     */
+    private static function compileSnippets(array $bySlot): void
+    {
+        $new = [];
+        foreach (self::SNIPPET_SLOTS as $slot) {
+            $new[$slot] = implode("\n", $bySlot[$slot] ?? []);
+        }
+
+        $old = is_file(self::SNIPPETS_CACHE) ? require self::SNIPPETS_CACHE : null;
+        if (!is_array($old)) {
+            $old = array_fill_keys(self::SNIPPET_SLOTS, '');
+        }
+
+        $export = var_export($new, true);
+        $tmp    = self::SNIPPETS_CACHE . '.' . getmypid() . '.tmp';
+        file_put_contents($tmp, "<?php\n// HBP Plugin Snippets - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n", LOCK_EX);
+        rename($tmp, self::SNIPPETS_CACHE);
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::SNIPPETS_CACHE, true);   // see SidebarCompiler::forgetCompiled()
+        }
+        self::$snippets = $new;
+
+        if ($old === $new) {
+            return;
+        }
+        require_once CORE_PATH . '/CacheManager.php';
+        require_once CORE_PATH . '/SecurityHeaderCompiler.php';
+        CacheManager::purgeAll();
+        SecurityHeaderCompiler::compile();
     }
 
     /**
@@ -218,6 +334,9 @@ class PluginManager
                 "<?php\n// HBP Plugin Language Pack [{$locale}] - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n",
                 LOCK_EX
             );
+            if (function_exists('opcache_invalidate')) {
+                @opcache_invalidate(sprintf(self::LANG_CACHE_FMT, $locale), true);   // see SidebarCompiler::forgetCompiled()
+            }
         }
 
         // {@ key @} is resolved at view-compile time, so a view compiled before this catalog
@@ -409,5 +528,9 @@ class PluginManager
     {
         $export = var_export($active, true);
         file_put_contents(self::ACTIVE_FILE, "<?php\nreturn {$export};\n", LOCK_EX);
+        // rebuildCache() requires this file right after; without this it may get the cached old list
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::ACTIVE_FILE, true);
+        }
     }
 }

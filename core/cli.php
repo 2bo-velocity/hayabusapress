@@ -74,6 +74,9 @@ match ($command) {
     'sitemap:rebuild'   => cmd_sitemap_rebuild($arg),
     'counters:rebuild'  => cmd_counters_rebuild(),
     'tags:reindex'      => cmd_tags_reindex(),
+    // Reusable blocks / managed links
+    'blocks:rebuild'    => cmd_blocks_rebuild(),
+    'links:rebuild'     => cmd_links_rebuild(),
     // scheduled publishing
     'posts:publish-due' => cmd_posts_publish_due(),
     'schedule:recompile' => cmd_schedule_recompile(),
@@ -146,6 +149,10 @@ Usage:
   php core/cli.php counters:rebuild              Recompute categories.post_count / tags.post_count
   php core/cli.php tags:reindex                  Rebuild post_tags' denormalized listing keys
 
+  # Reusable blocks / managed links
+  php core/cli.php blocks:rebuild                Rebuild blocks.cache.php ({{ block:slug }}) and clear all FPC
+  php core/cli.php links:rebuild                 Rebuild links.cache.php (/go/{alias})
+
   # Scheduled publishing
   php core/cli.php posts:publish-due             Promote scheduled posts whose time has come
   php core/cli.php schedule:recompile            Recompute next_schedule.php (next firing time)
@@ -207,10 +214,16 @@ function cmd_init(): void
     foreach (array_keys($contentLocales) as $lang) {
         SidebarCompiler::compileRecentCommentsWidget($lang);
         SidebarCompiler::compileArchiveWidget($lang);
-        SidebarCompiler::compileLayout('sidebar_left', $lang);
-        SidebarCompiler::compileLayout('sidebar_right', $lang);
+        SidebarCompiler::compileAllLayouts($lang);
     }
+    SidebarCompiler::compileHtmlSources();
     echo "  SidebarCompiler        [OK]\n";
+
+    require_once CORE_PATH . '/BlockCompiler.php';
+    require_once CORE_PATH . '/LinkCompiler.php';
+    BlockCompiler::compile();
+    LinkCompiler::compile();
+    echo "  Block/LinkCompiler     [OK]\n";
 
     SeoCompiler::compile();
     echo "  SeoCompiler            [OK]\n";
@@ -325,21 +338,14 @@ function cmd_tool_key(): void
 }
 
 /**
- * Split SQL on ; and exclude chunks consisting entirely of comment/blank lines.
- * The key point is to keep INSERTs with a leading comment block (seed, baseline, etc.) as execution targets.
- * Each statement is returned with leading-line comments (^\s*-- ...) removed (trailing inline comments `..., -- desc` are preserved).
+ * Split SQL into statements with the migrator's splitter, the same one the browser installer uses.
+ * It does not split on ';' inside comments, string literals or dollar-quoted bodies -- the full
+ * schema has such ';' (the SPDX header line, column COMMENTs) -- and drops comment-only chunks while
+ * keeping statements that follow a comment block (seed, baseline, etc.).
  */
 function split_sql_statements(string $sql): array
 {
-    $out = [];
-    foreach (explode(';', $sql) as $chunk) {
-        $clean = preg_replace('/^[ \t]*--[^\n]*$/m', '', $chunk);
-        $clean = trim((string)$clean);
-        if ($clean !== '') {
-            $out[] = $clean;
-        }
-    }
-    return $out;
+    return Migrator::splitStatements($sql);
 }
 
 function cmd_db_install(): void
@@ -421,7 +427,7 @@ function cmd_seed_hello_world(PDO $pdo, string $driver): void
            created_at, updated_at)
          VALUES
           ('post', ?, ?, 'Hello World!', ?, ?, 'published', ?,
-           NULL, 1, 1, 1, 1, ?, ?)"
+           NULL, TRUE, TRUE, TRUE, TRUE, ?, ?)"   // TRUE, not 1: PostgreSQL rejects an integer for a BOOLEAN column
     )->execute([$defaultLang, $slug, $markdown, $contentHtml, $catId, $now, $now]);
 
     echo "Created a sample post.\n";
@@ -554,6 +560,22 @@ function print_media_dir_diagnostic(): void
     echo "\n";
 }
 
+function cmd_blocks_rebuild(): void
+{
+    require_once CORE_PATH . '/BlockCompiler.php';
+    require_once CORE_PATH . '/CacheManager.php';
+    BlockCompiler::compile();
+    CacheManager::purgeAll();   // every cached page may embed a block
+    echo "Rebuilt blocks.cache.php and cleared all FPC.\n";
+}
+
+function cmd_links_rebuild(): void
+{
+    require_once CORE_PATH . '/LinkCompiler.php';
+    LinkCompiler::compile();
+    echo "Rebuilt links.cache.php.\n";
+}
+
 function cmd_posts_recompile(): void
 {
     echo "Recompiling all posts (re-render Markdown + apply HtmlSanitizer)...\n";
@@ -562,12 +584,23 @@ function cmd_posts_recompile(): void
     require_once CORE_PATH . '/HtmlSanitizer.php';
     require_once CORE_PATH . '/CacheManager.php';
 
-    $posts = DB::fetchAll('SELECT id, content_markdown, user_id FROM posts');
+    // Re-render with the author's own raw_html permission, as the editor's save would.
+    // user_id NULL is the Super User, who bypasses the matrix.
+    $matrix  = require CORE_PATH . '/permissions.php';
+    $rawById = [];
+    foreach (DB::fetchAll('SELECT id, role FROM users') as $u) {
+        $rawById[(int)$u['id']] = !empty($matrix[(string)$u['role']]['post:raw_html']);
+    }
+
+    $posts = DB::fetchAll('SELECT id, lang, content_markdown, user_id, show_toc, is_sponsored FROM posts');
     $count = 0;
     foreach ($posts as $post) {
-        // Super User / administrator are treated as raw_html-allowed
-        $allowRaw    = true; // Maximum permission in the CLI
-        $contentHtml = MarkdownCompiler::render($post['content_markdown'], $allowRaw);
+        $allowRaw    = $post['user_id'] === null || ($rawById[(int)$post['user_id']] ?? false);
+        $contentHtml = MarkdownCompiler::render($post['content_markdown'], $allowRaw, [
+            'toc'       => !empty($post['show_toc']),
+            'sponsored' => !empty($post['is_sponsored']),
+            'lang'      => (string)$post['lang'],
+        ]);
         DB::execute('UPDATE posts SET content_html = ? WHERE id = ?', [$contentHtml, (int)$post['id']]);
         $count++;
     }

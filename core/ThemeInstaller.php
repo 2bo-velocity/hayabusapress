@@ -28,6 +28,9 @@ class ThemeInstaller
         'png', 'jpg', 'jpeg', 'webp', 'gif', 'ico', 'woff', 'woff2', 'ttf',
     ];
 
+    /** Extension-less files accepted by exact name (licence and notice files of the package). */
+    private const ALLOWED_BARE_NAMES = ['LICENSE', 'LICENCE', 'COPYING', 'NOTICE', 'README', 'CHANGELOG', 'AUTHORS'];
+
     /** A valid theme must provide these templates. */
     private const REQUIRED_TEMPLATES = ['index', 'post', 'page', 'header', 'footer'];
 
@@ -126,8 +129,9 @@ class ThemeInstaller
                 continue;
             }
 
-            $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-            if (!in_array($ext, self::ALLOWED_EXTS, true)) {
+            $ext  = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+            $bare = $ext === '' && in_array(strtoupper(basename($name)), self::ALLOWED_BARE_NAMES, true);
+            if (!$bare && !in_array($ext, self::ALLOWED_EXTS, true)) {
                 $zip->close();
                 self::cleanStage($stageDir);
                 throw new RuntimeException(HbpLocale::t('err_ext_not_allowed', 'Disallowed extension: .') . $ext);

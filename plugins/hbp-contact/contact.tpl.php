@@ -14,7 +14,7 @@
 
         <form method="post" class="hbp-contact-form">
             <!-- Honeypot (spam-bot defense) -->
-            <input type="text" name="hbp_hp_email_field" style="display:none" tabindex="-1" autocomplete="off">
+            <input type="text" name="hbp_hp_email_field" hidden tabindex="-1" autocomplete="off" aria-hidden="true">
 
             <div class="hbp-form-group">
                 <label>{@ hbp-contact.name @}</label>

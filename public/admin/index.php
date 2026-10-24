@@ -199,7 +199,16 @@ if ($subPath === '/upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($subPath === '/preview' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $markdown     = (string)($_POST['content_markdown'] ?? '');
     $allowRawHtml = Auth::isSuperUser() || (class_exists('Gate') && Gate::can('post:raw_html'));
-    $html         = MarkdownCompiler::render($markdown, $allowRawHtml);
+    $html         = MarkdownCompiler::render($markdown, $allowRawHtml, [
+        'toc'       => !empty($_POST['show_toc']),
+        'sponsored' => !empty($_POST['is_sponsored']),
+        'lang'      => (string)($_POST['lang'] ?? ''),
+    ]);
+    // Show reusable blocks in place, as the public page will (the marker itself renders as nothing)
+    if (str_contains($html, '<!--hbp:block:')) {
+        require_once CORE_PATH . '/BlockCompiler.php';
+        $html = BlockCompiler::expand($html, (string)($_POST['lang'] ?? Env::get('SITE_DEFAULT_LANG', 'en')));
+    }
 
     // Rewrite draft images (exist in storage/upload = unpublished) to the management delivery URL.
     // public URLs are sharded (/assets/articles/{ab}/{cd}/{file}). By trailing filename,
@@ -345,6 +354,14 @@ match (true) {
     // --- Sidebar management ---
     $subPath === '/sidebar' => handleAdminSidebar($commonData),
     $subPath === '/sidebar/save' && isPost() => handleAdminSidebarSave($adminPath),
+    $subPath === '/sidebar/add' && isPost() => handleAdminSidebarAdd($adminPath),
+
+    // --- Reusable blocks / managed links ---
+    $subPath === '/blocks' => handleAdminBlocks($commonData),
+    $subPath === '/blocks/save' && isPost() => handleAdminBlockSave($adminPath),
+    $subPath === '/blocks/delete' && isPost() => handleAdminBlockDelete($adminPath),
+    $subPath === '/links' => handleAdminLinks($commonData),
+    $subPath === '/links/save' && isPost() => handleAdminLinksSave($adminPath),
 
     // --- Category/tag management ---
     $subPath === '/categories' => handleAdminCategories($commonData),
@@ -619,7 +636,11 @@ function handleAdminPostSave(array $common, string $adminPath): void
             RouterCompiler::compile();
         }
 
-        header('Location: /' . $adminPath . '/post/edit/' . $id . '?saved=1');
+        // Saved regardless; only remind the author when the body links to managed (/go/) links but the
+        // post is not marked as sponsored.
+        $hint = empty($_POST['is_sponsored']) && str_contains((string)($_POST['content_markdown'] ?? ''), '](/go/')
+            ? '&sponsor_hint=1' : '';
+        header('Location: /' . $adminPath . '/post/edit/' . $id . '?saved=1' . $hint);
     } catch (Exception $e) {
         $data = AdminPostController::getEditData(!empty($_POST['id']) ? (int)$_POST['id'] : null);
         View::render('admin/edit', array_merge($common, $data, ['error' => $e->getMessage()]));
@@ -790,6 +811,10 @@ function handleAdminMenuSave(string $adminPath): void
         }
     }
     MenuCompiler::save($location, $items);
+    // 'menu' widgets embed a menu, so the areas are rebuilt too
+    foreach (hbpContentLangs() as $lang) {
+        SidebarCompiler::compileAllLayouts($lang);
+    }
 
     // A menu change affects the site-wide header, so purge all FPC
     require_once CORE_PATH . '/CacheManager.php';
@@ -802,47 +827,287 @@ function handleAdminMenuSave(string $adminPath): void
 function handleAdminSidebar(array $common): void
 {
     Gate::authorize('nav:manage');
-    $widgetsLeft  = DB::fetchAll("SELECT id, widget_key, sort_order FROM sidebar_widgets WHERE sidebar_location='sidebar_left'  ORDER BY sort_order");
-    $widgetsRight = DB::fetchAll("SELECT id, widget_key, sort_order FROM sidebar_widgets WHERE sidebar_location='sidebar_right' ORDER BY sort_order");
-    $allWidgets   = ['search', 'recent_comments', 'archive', 'categories', 'tags'];
-    View::render('admin/sidebar', array_merge($common, compact('widgetsLeft', 'widgetsRight', 'allWidgets')));
+    $areas = SidebarCompiler::LOCATIONS;
+    $area  = in_array($_GET['area'] ?? '', $areas, true) ? $_GET['area'] : $areas[0];
+
+    $widgets = [];
+    foreach (DB::fetchAll(
+        'SELECT id, widget_key, title, settings, sort_order FROM sidebar_widgets WHERE sidebar_location = ? ORDER BY sort_order, id',
+        [$area]
+    ) as $row) {
+        $settings        = json_decode((string)($row['settings'] ?? ''), true);
+        $row['settings'] = is_array($settings) ? $settings : [];
+        $widgets[]       = $row;
+    }
+    $counts = [];
+    foreach (DB::fetchAll('SELECT sidebar_location, COUNT(*) AS n FROM sidebar_widgets GROUP BY sidebar_location') as $r) {
+        $counts[$r['sidebar_location']] = (int)$r['n'];
+    }
+    $allWidgets    = SidebarCompiler::WIDGET_KEYS;
+    $canRawHtml    = Gate::can('post:raw_html');
+    require_once CORE_PATH . '/MenuCompiler.php';
+    $menuLocations = MenuCompiler::LOCATIONS;
+    View::render('admin/sidebar', array_merge($common, compact('areas', 'area', 'widgets', 'counts', 'allWidgets', 'canRawHtml', 'menuLocations')));
 }
 
+/** Content languages, falling back to the default language. */
+function hbpContentLangs(): array
+{
+    $contentLocales = HbpLocale::getAvailableContentLocales();
+    return $contentLocales ? array_keys($contentLocales) : [Env::get('SITE_DEFAULT_LANG', 'en')];
+}
+
+/** After any widget change: rebuild every area in every language, the CSP, and the page cache. */
+function hbpRecompileWidgets(): void
+{
+    foreach (hbpContentLangs() as $lang) {
+        SidebarCompiler::compileRecentCommentsWidget($lang);
+        SidebarCompiler::compileArchiveWidget($lang);
+        SidebarCompiler::compileAllLayouts($lang);
+    }
+    // 'html' widgets may carry inline scripts: their hashes go into the CSP
+    SidebarCompiler::compileHtmlSources();
+    SecurityHeaderCompiler::compile();
+    CacheManager::purgeAll();
+}
+
+/**
+ * Save one area: headings, order, settings and deletions of its existing widgets.
+ *
+ * 'html' widgets print raw HTML, so only roles with post:raw_html may change or delete them. For
+ * anyone else their stored title/settings are kept as they are; reordering is still allowed.
+ */
 function handleAdminSidebarSave(string $adminPath): void
 {
     Gate::authorize('nav:manage');
-    $location = $_POST['location'] ?? 'sidebar_right';
-    $keys     = $_POST['widget_keys'] ?? [];
-
-    // Fix the sidebar_widgets enum values (reject out-of-range location / widget_key)
-    $validLocations = ['sidebar_left', 'sidebar_right'];
-    $validWidgets   = ['search', 'recent_comments', 'archive', 'categories', 'tags'];
-    if (!in_array($location, $validLocations, true)) {
+    $location = (string)($_POST['location'] ?? '');
+    if (!in_array($location, SidebarCompiler::LOCATIONS, true)) {
         header('Location: /' . $adminPath . '/sidebar?error=1');
         exit;
     }
-    $keys = array_values(array_filter((array)$keys, static fn($k) => in_array($k, $validWidgets, true)));
+    $back       = '/' . $adminPath . '/sidebar?area=' . rawurlencode($location);
+    $canRawHtml = Gate::can('post:raw_html');
+    $posted     = (array)($_POST['widgets'] ?? []);
 
-    DB::execute('DELETE FROM sidebar_widgets WHERE sidebar_location=?', [$location]);
-    foreach ($keys as $order => $key) {
+    $rows = DB::fetchAll('SELECT id, widget_key, title, settings FROM sidebar_widgets WHERE sidebar_location = ?', [$location]);
+    foreach ($rows as $row) {
+        $id  = (int)$row['id'];
+        $key = (string)$row['widget_key'];
+        $in  = isset($posted[$id]) && is_array($posted[$id]) ? $posted[$id] : null;
+        if ($in === null) {
+            continue;
+        }
+        $locked = $key === 'html' && !$canRawHtml;
+
+        if (!empty($in['delete'])) {
+            if (!$locked) {
+                DB::execute('DELETE FROM sidebar_widgets WHERE id = ?', [$id]);
+            }
+            continue;
+        }
+
+        $order = (int)($in['order'] ?? 0);
+        if ($locked) {
+            DB::execute('UPDATE sidebar_widgets SET sort_order = ? WHERE id = ?', [$order, $id]);
+            continue;
+        }
+        $title    = mb_substr(trim((string)($in['title'] ?? '')), 0, 255);
+        $settings = SidebarCompiler::normalizeSettings($key, (array)($in['settings'] ?? []));
+        $json     = $settings === null ? null : json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($json !== null && strlen($json) > 65535) {
+            header('Location: ' . $back . '&error=too_long');
+            exit;
+        }
         DB::execute(
-            'INSERT INTO sidebar_widgets (sidebar_location, widget_key, sort_order, created_at) VALUES (?,?,?,NOW())',
-            [$location, $key, $order]
+            'UPDATE sidebar_widgets SET title = ?, settings = ?, sort_order = ? WHERE id = ?',
+            [$title === '' ? null : $title, $json, $order, $id]
         );
     }
-    // Recompile the sidebar for all content languages
-    $contentLocales = HbpLocale::getAvailableContentLocales();
-    if (empty($contentLocales)) {
-        $contentLocales = [(Env::get('SITE_DEFAULT_LANG', 'en')) => 'default'];
+
+    hbpRecompileWidgets();
+    header('Location: ' . $back . '&saved=1');
+    exit;
+}
+
+/** Append a new widget to an area, with default settings. */
+function handleAdminSidebarAdd(string $adminPath): void
+{
+    Gate::authorize('nav:manage');
+    $location = (string)($_POST['location'] ?? '');
+    $key      = (string)($_POST['widget_key'] ?? '');
+    if (!in_array($location, SidebarCompiler::LOCATIONS, true) || !in_array($key, SidebarCompiler::WIDGET_KEYS, true)) {
+        header('Location: /' . $adminPath . '/sidebar?error=1');
+        exit;
     }
-    foreach (array_keys($contentLocales) as $lang) {
-        // On a widget-configuration change, recompile all widgets
-        SidebarCompiler::compileRecentCommentsWidget($lang);
-        SidebarCompiler::compileArchiveWidget($lang);
-        SidebarCompiler::compileLayout($location, $lang);
+    $back = '/' . $adminPath . '/sidebar?area=' . rawurlencode($location);
+    if ($key === 'html' && !Gate::can('post:raw_html')) {
+        header('Location: ' . $back . '&error=permission');
+        exit;
     }
+    $max      = DB::fetchOne('SELECT MAX(sort_order) AS m FROM sidebar_widgets WHERE sidebar_location = ?', [$location]);
+    $order    = $max && $max['m'] !== null ? (int)$max['m'] + 1 : 0;
+    $settings = SidebarCompiler::defaultSettings($key);
+    DB::execute(
+        'INSERT INTO sidebar_widgets (sidebar_location, widget_key, title, settings, sort_order, created_at) VALUES (?,?,?,?,?,?)',
+        [$location, $key, null, $settings === null ? null : json_encode($settings, JSON_UNESCAPED_UNICODE), $order, gmdate('Y-m-d H:i:s')]
+    );
+
+    hbpRecompileWidgets();
+    header('Location: ' . $back . '&added=1');
+    exit;
+}
+
+// ------------------------------------------------------------
+// Reusable blocks ({{ block:slug }}). Editing one rebuilds blocks.cache.php and purges the page
+// cache; the posts that use it are not recompiled (see BlockCompiler).
+// ------------------------------------------------------------
+
+function handleAdminBlocks(array $common): void
+{
+    Gate::authorize('blocks:manage');
+    require_once CORE_PATH . '/BlockCompiler.php';
+    $blocks  = DB::fetchAll('SELECT id, slug, lang, title, updated_at FROM blocks ORDER BY lang, slug');
+    $id      = (int)($_GET['id'] ?? 0);
+    $editing = $id > 0 ? (DB::fetchOne('SELECT id, slug, lang, title, body FROM blocks WHERE id = ?', [$id]) ?: null) : null;
+    // Preview with the same profile the public pages get (raw HTML allowed: blocks:manage is trusted).
+    $preview        = $editing ? MarkdownCompiler::render((string)$editing['body'], true) : '';
+    $contentLocales = hbpContentLocales();
+    View::render('admin/blocks', array_merge($common, compact('blocks', 'editing', 'preview', 'contentLocales')));
+}
+
+/** Content language code => label, falling back to the default language. */
+function hbpContentLocales(): array
+{
+    $locales = HbpLocale::getAvailableContentLocales();
+    return $locales ?: [Env::get('SITE_DEFAULT_LANG', 'en') => strtoupper(Env::get('SITE_DEFAULT_LANG', 'en'))];
+}
+
+function hbpAfterBlocksChange(): void
+{
+    require_once CORE_PATH . '/BlockCompiler.php';
+    BlockCompiler::compile();
     CacheManager::purgeAll();
-    header('Location: /' . $adminPath . '/sidebar?saved=1');
+}
+
+function handleAdminBlockSave(string $adminPath): void
+{
+    Gate::authorize('blocks:manage');
+    require_once CORE_PATH . '/BlockCompiler.php';
+    $id    = (int)($_POST['id'] ?? 0);
+    $slug  = strtolower(trim((string)($_POST['slug'] ?? '')));
+    $lang  = (string)($_POST['lang'] ?? '');
+    $title = mb_substr(trim((string)($_POST['title'] ?? '')), 0, 255);
+    // LF like every other stored body (a textarea posts CRLF)
+    $body  = mb_substr(trim(str_replace(["\r\n", "\r"], "\n", (string)($_POST['body'] ?? ''))), 0, BlockCompiler::BODY_MAX);
+    $back  = '/' . $adminPath . '/blocks' . ($id > 0 ? '?id=' . $id . '&' : '?');
+
+    if (!preg_match(BlockCompiler::SLUG_PATTERN, $slug) || !isset(hbpContentLocales()[$lang]) || $title === '') {
+        header('Location: ' . $back . 'error=invalid');
+        exit;
+    }
+    $dup = DB::fetchOne('SELECT id FROM blocks WHERE slug = ? AND lang = ? AND id <> ?', [$slug, $lang, $id]);
+    if ($dup) {
+        header('Location: ' . $back . 'error=duplicate');
+        exit;
+    }
+    $now = gmdate('Y-m-d H:i:s');
+    if ($id > 0) {
+        // updated_at is set explicitly: PostgreSQL has no ON UPDATE CURRENT_TIMESTAMP
+        DB::execute('UPDATE blocks SET slug = ?, lang = ?, title = ?, body = ?, updated_at = ? WHERE id = ?', [$slug, $lang, $title, $body, $now, $id]);
+    } else {
+        DB::execute('INSERT INTO blocks (slug, lang, title, body, created_at, updated_at) VALUES (?,?,?,?,?,?)', [$slug, $lang, $title, $body, $now, $now]);
+        $id = (int)DB::lastInsertId();
+    }
+    hbpAfterBlocksChange();
+    header('Location: /' . $adminPath . '/blocks?id=' . $id . '&saved=1');
+    exit;
+}
+
+function handleAdminBlockDelete(string $adminPath): void
+{
+    Gate::authorize('blocks:manage');
+    DB::execute('DELETE FROM blocks WHERE id = ?', [(int)($_POST['id'] ?? 0)]);
+    hbpAfterBlocksChange();
+    header('Location: /' . $adminPath . '/blocks?deleted=1');
+    exit;
+}
+
+// ------------------------------------------------------------
+// Managed links (/go/{alias}). Served from links.cache.php, outside the page cache, so a change
+// needs no purge.
+// ------------------------------------------------------------
+
+function handleAdminLinks(array $common): void
+{
+    Gate::authorize('links:manage');
+    $links = DB::fetchAll('SELECT id, alias, target_url, note, updated_at FROM links ORDER BY alias');
+    View::render('admin/links', array_merge($common, compact('links')));
+}
+
+/** Save the whole table at once: edits and deletions of existing rows plus one optional new row. */
+function handleAdminLinksSave(string $adminPath): void
+{
+    Gate::authorize('links:manage');
+    require_once CORE_PATH . '/LinkCompiler.php';
+    $back = '/' . $adminPath . '/links';
+    $now  = gmdate('Y-m-d H:i:s');
+
+    $rows = [];
+    foreach ((array)($_POST['links'] ?? []) as $id => $in) {
+        if (is_array($in) && (int)$id > 0) {
+            $rows[(int)$id] = $in;
+        }
+    }
+    $new = [
+        'alias'      => strtolower(trim((string)($_POST['new_alias'] ?? ''))),
+        'target_url' => trim((string)($_POST['new_target_url'] ?? '')),
+        'note'       => mb_substr(trim((string)($_POST['new_note'] ?? '')), 0, 255),
+    ];
+
+    // Validate everything first, so a bad row leaves the table untouched.
+    $aliases = [];
+    foreach ($rows as $id => $in) {
+        if (!empty($in['delete'])) {
+            continue;
+        }
+        $alias = strtolower(trim((string)($in['alias'] ?? '')));
+        $url   = trim((string)($in['target_url'] ?? ''));
+        if (!preg_match(LinkCompiler::ALIAS_PATTERN, $alias) || !LinkCompiler::isValidTarget($url) || isset($aliases[$alias])) {
+            header('Location: ' . $back . '?error=invalid&row=' . $id);
+            exit;
+        }
+        $aliases[$alias] = true;
+    }
+    $addNew = $new['alias'] !== '' || $new['target_url'] !== '';
+    if ($addNew && (!preg_match(LinkCompiler::ALIAS_PATTERN, $new['alias']) || !LinkCompiler::isValidTarget($new['target_url']) || isset($aliases[$new['alias']]))) {
+        header('Location: ' . $back . '?error=invalid&row=new');
+        exit;
+    }
+
+    foreach ($rows as $id => $in) {
+        if (!empty($in['delete'])) {
+            DB::execute('DELETE FROM links WHERE id = ?', [$id]);
+            continue;
+        }
+        DB::execute(
+            'UPDATE links SET alias = ?, target_url = ?, note = ?, updated_at = ? WHERE id = ?',
+            [strtolower(trim((string)$in['alias'])), trim((string)$in['target_url']), mb_substr(trim((string)($in['note'] ?? '')), 0, 255) ?: null, $now, $id]
+        );
+    }
+    if ($addNew) {
+        $exists = DB::fetchOne('SELECT id FROM links WHERE alias = ?', [$new['alias']]);
+        if ($exists) {
+            LinkCompiler::compile();
+            header('Location: ' . $back . '?error=duplicate');
+            exit;
+        }
+        DB::execute(
+            'INSERT INTO links (alias, target_url, note, created_at, updated_at) VALUES (?,?,?,?,?)',
+            [$new['alias'], $new['target_url'], $new['note'] ?: null, $now, $now]
+        );
+    }
+    LinkCompiler::compile();
+    header('Location: ' . $back . '?saved=1');
     exit;
 }
 
@@ -1401,9 +1666,13 @@ function handleAdminMaintenanceRun(string $adminPath): void
             foreach (array_keys($contentLocales) as $lang) {
                 SidebarCompiler::compileRecentCommentsWidget($lang);
                 SidebarCompiler::compileArchiveWidget($lang);
-                SidebarCompiler::compileLayout('sidebar_left', $lang);
-                SidebarCompiler::compileLayout('sidebar_right', $lang);
+                SidebarCompiler::compileAllLayouts($lang);
             }
+            SidebarCompiler::compileHtmlSources();
+            require_once CORE_PATH . '/BlockCompiler.php';
+            require_once CORE_PATH . '/LinkCompiler.php';
+            BlockCompiler::compile();
+            LinkCompiler::compile();
 
             SeoCompiler::compile();
             SiteFileCompiler::compileSitemap(true);

@@ -16,6 +16,9 @@ declare(strict_types=1);
  * - On activation, the theme's assets are published to public/assets/themes/{name}/ and all FPC /
  *   front view caches are purged so Auto-Healing regenerates pages with the new theme.
  * - Templates reference assets via ThemeManager::assetBase() => /assets/themes/{name}.
+ * - theme.json may declare "layouts": which widget areas a page shows, plus a body class. A post
+ *   picks one (posts.layout); themes without the key get a single "default" layout showing every
+ *   area, which is the pre-1.3.0 behavior.
  */
 class ThemeManager
 {
@@ -27,7 +30,12 @@ class ThemeManager
     /** Minimum templates a theme must provide to be activatable. */
     private const REQUIRED_TEMPLATES = ['index', 'post', 'page', 'header', 'footer'];
 
+    /** Layout used when a post names none, or names one the active theme does not declare. */
+    public const DEFAULT_LAYOUT = 'default';
+
     private static ?string $active = null;
+    /** @var array<string,array>|null request-local memo for layouts() */
+    private static ?array $layouts = null;
 
     /** The active theme name (falls back to 'default' when unset/invalid/missing). */
     public static function active(): string
@@ -43,6 +51,73 @@ class ThemeManager
             }
         }
         return self::$active = $name;
+    }
+
+    /**
+     * Layouts declared by the active theme, keyed by ID. Always contains DEFAULT_LAYOUT.
+     *
+     * theme.json:
+     *   "layouts": {
+     *     "wide": { "label": {"en": "Single column", "ja": "1カラム"},
+     *               "areas": ["header_below", "content_before", "content_after", "footer"],
+     *               "body_class": "hbp-layout-wide" }
+     *   }
+     * Unknown area names are dropped; a layout without "areas" shows every area.
+     *
+     * @return array<string, array{id:string,label:string|array,areas:string[],body_class:string}>
+     */
+    public static function layouts(): array
+    {
+        if (self::$layouts !== null) {
+            return self::$layouts;
+        }
+        require_once CORE_PATH . '/SidebarCompiler.php';
+        $all  = SidebarCompiler::LOCATIONS;
+        $meta = [];
+        $manifest = self::dir() . '/theme.json';
+        if (is_file($manifest)) {
+            $decoded = json_decode((string)file_get_contents($manifest), true);
+            $meta    = is_array($decoded) ? $decoded : [];
+        }
+
+        $out = [];
+        foreach ((array)($meta['layouts'] ?? []) as $id => $def) {
+            if (!is_string($id) || !self::isValidName($id) || !is_array($def)) {
+                continue;
+            }
+            $areas = isset($def['areas']) ? array_values(array_intersect((array)$def['areas'], $all)) : $all;
+            $label = $def['label'] ?? $id;
+            $out[$id] = [
+                'id'         => $id,
+                'label'      => is_array($label) || is_string($label) ? $label : $id,
+                'areas'      => $areas,
+                // Class names only: the value lands in an attribute of every page.
+                'body_class' => trim((string)preg_replace('/[^A-Za-z0-9_\- ]/', '', (string)($def['body_class'] ?? ''))),
+            ];
+        }
+        if (!isset($out[self::DEFAULT_LAYOUT])) {
+            $out = [self::DEFAULT_LAYOUT => [
+                'id' => self::DEFAULT_LAYOUT, 'label' => 'Default', 'areas' => $all, 'body_class' => '',
+            ]] + $out;
+        }
+        return self::$layouts = $out;
+    }
+
+    /** Resolve a layout ID (posts.layout) to its definition, falling back to the default layout. */
+    public static function layout(?string $id): array
+    {
+        $all = self::layouts();
+        return $all[$id ?? self::DEFAULT_LAYOUT] ?? $all[self::DEFAULT_LAYOUT];
+    }
+
+    /** Display label of a layout for a locale (label may be a string or {"en": ..., "ja": ...}). */
+    public static function layoutLabel(array $layout, string $locale): string
+    {
+        $label = $layout['label'] ?? $layout['id'] ?? '';
+        if (is_array($label)) {
+            return (string)($label[$locale] ?? $label['en'] ?? reset($label) ?: ($layout['id'] ?? ''));
+        }
+        return (string)$label;
     }
 
     /** Web base URL for the active theme's published assets, e.g. /assets/themes/default */
@@ -188,11 +263,15 @@ class ThemeManager
 
     private static function save(string $name): void
     {
+        self::$layouts = null;
         $dir = dirname(self::ACTIVE_FILE);
         if (!is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
         file_put_contents(self::ACTIVE_FILE, "<?php\nreturn " . var_export($name, true) . ";\n", LOCK_EX);
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::ACTIVE_FILE, true);   // see SidebarCompiler::forgetCompiled()
+        }
     }
 
     /** After a switch: drop all FPC + front view cache, recompute CSP hashes. */

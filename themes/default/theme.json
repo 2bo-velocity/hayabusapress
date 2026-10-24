@@ -3,5 +3,43 @@
     "version": "1.0.0",
     "author": "HBP Core Team",
     "description": "HayabusaPress 標準テーマ。完全自前手書きCSS・フレームワーク不使用の軽量公開画面デザイン。",
-    "screenshot": "screenshot.png"
+    "screenshot": "screenshot.png",
+    "layouts": {
+        "default": {
+            "label": {
+                "en": "Standard (with sidebar)",
+                "ja": "標準（サイドバーあり）"
+            },
+            "areas": [
+                "header_below",
+                "sidebar_right",
+                "content_before",
+                "content_after",
+                "footer"
+            ]
+        },
+        "wide": {
+            "label": {
+                "en": "Single column",
+                "ja": "1カラム（サイドバーなし）"
+            },
+            "areas": [
+                "header_below",
+                "content_before",
+                "content_after",
+                "footer"
+            ],
+            "body_class": "hbp-layout-wide"
+        },
+        "minimal": {
+            "label": {
+                "en": "Minimal (narrow, footer area only)",
+                "ja": "シンプル（幅狭・フッターのみ）"
+            },
+            "areas": [
+                "footer"
+            ],
+            "body_class": "hbp-layout-minimal"
+        }
+    }
 }

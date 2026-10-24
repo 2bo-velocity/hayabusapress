@@ -24,6 +24,9 @@ class SeoCompiler
                 "<?php\nreturn {$export};\n",
                 LOCK_EX
             );
+            if (function_exists('opcache_invalidate')) {
+                @opcache_invalidate(self::GLOBAL_CACHE, true);   // see SidebarCompiler::forgetCompiled()
+            }
         }
 
         $cfg = self::loadGlobal();

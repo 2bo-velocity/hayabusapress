@@ -5,24 +5,24 @@
 This directory holds **schema diffs between released versions** as forward-only migrations.
 
 ## Conventions
-- Filename: `V{nnn}__{description}.{driver}.sql`
-  - e.g. `V001__add_something.mysql.sql` / `V001__add_something.pgsql.sql`
+- Filename: `V{major}{minor}{patch}__{description}.{driver}.sql`, each number zero-padded to 3 digits
+  - e.g. `V001003000__widgets_layouts_links.mysql.sql` / `V001003000__widgets_layouts_links.pgsql.sql` (1.3.0)
 - `core/Migrator.php` applies them in ascending version order, idempotently. There is no `down` (rollback) — an iron rule. A mistake is corrected by **adding a further migration**, never by editing or reversing an old one.
 - Write every SQL file idempotently (`IF NOT EXISTS` and friends). MySQL DDL is non-transactional, so a partially applied file must converge when it is run again.
 
 ## Current diffs
 
-**As of 1.0.0 there are no diff files (this directory holds only this README).** `db:migrate` reports nothing pending.
+| Version | File | Changes | After applying |
+|---|---|---|---|
+| 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`; `posts.layout` / `show_toc` / `is_sponsored`; new tables `blocks` and `links` | Nothing to rebuild. Every new column defaults to the 1.0.0 behaviour |
 
-1.0.0 is the first release, so there is no older database to move forward. The complete 1.0.0 schema
-lives in `schema.mysql.sql` / `schema.pgsql.sql`. **Diffs start appearing here with the first release
-after 1.0.0 that changes the schema.**
+1.0.0 itself has no diff file: it is the baseline (`V001000000`), and its schema is the starting point
+that the diffs above move forward.
 
 ## How this directory divides work with schema.*.sql
 The **complete table definitions for a new install are the single source of truth in the parent
-directory**: `schema.mysql.sql` / `schema.pgsql.sql`. The whole 1.0.0 schema is there and no diff
-files accompany it (with no existing installation to apply them to, keeping them as diffs would serve
-no purpose).
+directory**: `schema.mysql.sql` / `schema.pgsql.sql`. They already contain every diff in this
+directory and stamp each one as applied, so a new install never runs the diffs.
 
 The split is: **`schema.*.sql` = the current complete form (for new installs)**, **this directory =
 the diff history (for upgrading existing installs)**. **When you change the schema, update both.**

@@ -21,7 +21,10 @@ class PluginInstaller
     private const STAGE_DIR      = STORAGE_PATH . '/upload/plugin_stage';
 
     /** Allowed extensions */
-    private const ALLOWED_EXTS = ['php', 'json', 'md', 'txt', 'css', 'js', 'svg', 'png', 'jpg', 'webp'];
+    private const ALLOWED_EXTS = ['php', 'json', 'md', 'txt', 'html', 'css', 'js', 'svg', 'png', 'jpg', 'webp'];
+
+    /** Extension-less files accepted by exact name (licence and notice files of the package). */
+    private const ALLOWED_BARE_NAMES = ['LICENSE', 'LICENCE', 'COPYING', 'NOTICE', 'README', 'CHANGELOG', 'AUTHORS'];
 
     /**
      * Safely extract a ZIP and install the plugin.
@@ -111,8 +114,9 @@ class PluginInstaller
                 continue;
             }
 
-            $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-            if (!in_array($ext, self::ALLOWED_EXTS, true)) {
+            $ext  = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+            $bare = $ext === '' && in_array(strtoupper(basename($name)), self::ALLOWED_BARE_NAMES, true);
+            if (!$bare && !in_array($ext, self::ALLOWED_EXTS, true)) {
                 $zip->close();
                 self::cleanStage($stageDir);
                 throw new RuntimeException(HbpLocale::t('err_ext_not_allowed', 'Disallowed extension: .') . $ext);

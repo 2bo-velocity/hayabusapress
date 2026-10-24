@@ -43,6 +43,13 @@ WordPress の「重さ・セキュリティの緩さ・積み上がった技術�
 | **分割ペインMarkdownエディタ** | タイトル/本文を分離入力。本文はプレーンテキスト（その場リッチ変換なし）＋サーバー側 `MarkdownCompiler` を共有する横並びライブプレビュー。画像のドラッグ&ドロップ、オートセーブ、ルビ/傍点ツールバー。 |
 | **添付画像の一覧・削除** | 本文入力欄の直下に、編集中コンテンツの添付画像（`attachments`）をサムネ一覧。各画像をカーソル位置へ本文挿入、または**物理削除**（確認必須・本文で使用中なら警告を強化）。本文の `![]()` 自動書き換えは行わない（リンク切れ除去はユーザー手動）。削除APIは `media:manage` ＋ CSRF、`post:edit_other` 無しなら自分のコンテンツのみ。 |
 | **文字数カウント** | タイトル・本文入力欄の左上に文字数をリアルタイム表示。**コードポイント単位**（`[...str].length`＝和文も半角も1文字）。タイトルは 255 ハード上限警告（230超で注意）、本文は推奨レンジのソフトガイド（薄い／標準／網羅）。クライアント側のみ＝サーバー・FPC への影響ゼロ。 |
+| **ウィジェットと配置エリア** | 11種類のウィジェット（検索・最近のコメント・アーカイブ・カテゴリ・タグ・最新記事・記事の手動ピックアップ・Markdown テキスト・画像バナー・生 HTML・メニュー）を、6つのエリア（右/左サイドバー・ヘッダー下・本文の前/後・フッター）に置けます。ウィジェットごとに見出しを付けられます。保存時にエリア別・言語別の HTML へコンパイルし、空のエリアは何も出力しません。 |
+| **記事ごとのレイアウト** | テーマが `theme.json` でレイアウト（どのエリアを出すか ＋ `<body>` のクラス）を宣言し、編集画面で選べます。同梱テーマは「標準」「1カラム」「シンプル」の3つです。 |
+| **目次** | 記事ごとにオン/オフ。保存時に H2/H3 から作り、最初の H2 の直前に入れます（H2 が2つ以上あるときだけ）。見出しの id は重複しないよう採番します。 |
+| **再利用ブロック** | **管理画面 → ブロック**で一度書いたものを、記事に `{{ block:slug }}` と1行書くだけで差し込めます。記事には目印だけを残し、ページキャッシュを書くときに展開するので、ブロックを直すと使っている全記事へ即座に反映されます（記事の再保存は不要）。 |
+| **ボタン** | `[[button:ラベル\|URL\|補足]]` の1行で、補足文つきの誘導ボタンを出します。危険な URL スキームは出力しません。 |
+| **リンク管理（`/go/`）** | **管理画面 → リンク**で `別名 → https://…` を登録し、記事からは `/go/別名` にリンクします。コンパイル済み配列から 302 で転送し、DB もページキャッシュも通りません。転送先は登録済みの `https://` だけで、応答には `X-Robots-Tag: noindex, nofollow` を付け、生成される `robots.txt` も `/go/` を除外します。 |
+| **広告・PR 表記** | 記事ごとの「広告・プロモーションを含む」設定で、本文の冒頭に表記を入れ（文言は `SPONSORED_NOTICE_TEXT` で変更可）、外部リンクに `rel="sponsored"` を付けます。`/go/` へのリンクには常に `rel="sponsored nofollow"` が付きます。 |
 | **アイキャッチ画像 / OGP** | `posts.featured_image` ＋ `featured_image_alt`。右ドロワーで設定。フォールバック連鎖（本文先頭画像 → サイトロゴ）を**保存時に解決**して焼き付け — 実行時の本文走査ゼロ。`og:image` を駆動。 |
 | **レスポンシブ・流動的タイポグラフィ** | テーマ指針：読者側は本文カラム ~720px・`clamp()` 16→18px、管理側はリキッド全幅・ラベル14px・**入力欄≥16px**（iOSズーム防止）。 |
 | **メディアの物理隔離** | 下書きメディアは `storage/upload/`（Web到達不可）に格納。公開時に `public/assets/articles/` へ atomic 移動、**非公開化で逆移動**。 |
@@ -53,9 +60,9 @@ WordPress の「重さ・セキュリティの緩さ・積み上がった技術�
 | **コメントのメール任意化** | コメントは名前＋本文のみ必須、**メール・ウェブサイトは任意**（`comments.author_email` は NULL 許容）。HBP は返信通知メールも外部 Gravatar も持たず、使えないメールを収集しない。コメント者アバターは**同梱の SVG シルエット**（`public/assets/site/avatar-default.svg`・`fill="currentColor"` でテーマ追従）＝外部リクエストゼロ。コンテンツ単位の受付可否はエディタ右ドロワーの `posts.allow_comment` トグル。 |
 | **コメント管理のフィルタ** | コメント管理画面をコンテンツ一覧と統一デザインに（PC=フィルタバー＋テーブル、スマホ=カード、ページネーション）。ステータス区分（件数バッジ付き）＋**投稿日時の期間**＋名前/メール/ウェブサイト（`LIKE`）＋紐づくコンテンツ（`post_id`・コンテンツ一覧から導線）で絞り込み。**本文は意図的に検索対象外**（長文＝索引非効率）。索引追加なし — `status`/期間は `idx_status_created`、`post_id` は `idx_comments_post`。一括操作なし・削除は確認必須。要 `comment:moderate`。 |
 | **スーパーユーザー** | 最高権限の管理者を `.env` のみで認証 — DBには一切保存しない。DB全消去でも締め出されない。 |
-| **ロールベースアクセス制御** | 静的RBACマトリクス（`permissions.php`・DBクエリゼロ）。4つのスタッフロール（Administrator / Editor / Author / Contributor）＋ Super User を、15の細粒度権限（記事・コメント・メディア・分類・ナビ・メンテ・IP・プラグイン・テーマ・ユーザー・設定）にマッピング。 |
+| **ロールベースアクセス制御** | 静的RBACマトリクス（`permissions.php`・DBクエリゼロ）。4つのスタッフロール（Administrator / Editor / Author / Contributor）＋ Super User を、17の細粒度権限（記事・コメント・メディア・分類・ナビ・ブロック・リンク・メンテ・IP・プラグイン・テーマ・ユーザー・設定）にマッピング。 |
 | **ネイティブTOTP 2FA** | RFC 6238 準拠。リプレイ防止（`tfa_last_step`）、5回失敗でセッション破棄、time-step再利用検知。 |
-| **マニフェスト型プラグイン** | `manifest.json` でフックを宣言。フックレジストリは事前コンパイル＋優先度ソート済み。リクエストごとの全プラグインロードなし。 |
+| **マニフェスト型プラグイン** | `manifest.json` でフックを宣言。フックレジストリは事前コンパイル＋優先度ソート済み。リクエストごとの全プラグインロードなし。`<head>` と `<body>` 末尾へ出す静的な HTML 断片はページキャッシュに焼き込まれ、実行時コストはゼロ。 |
 | **zip-slip安全インストーラ** | `PluginInstaller` が全ZIPエントリを検証し、シンボリックリンク＋zip爆弾を拒否、任意で Ed25519 署名を強制。 |
 | **デュアルIPブロックリスト** | `blocked_ips` テーブルが POST型スパムをブロック。`SITE_IP_DENYLIST` はコンパイル済み配列でページ閲覧をブロック — DBヒットゼロ。 |
 | **Atom 1.0 + RSS 2.0 フィード** | 言語別の事前コンパイルフィード（`feed.atom.xml`・`feed.rss.xml`）。記事公開時に生成 — 配信時DBゼロ。全 `<head>` に autodiscovery `<link>`。 |
@@ -128,9 +135,7 @@ php core/cli.php db:install && php core/cli.php system:init && php core/cli.php 
 
 ### 方法C — 既存インストールのアップグレード
 
-**1.0.0 は最初の公開リリースなので、アップグレード元となる版がまだ存在しません。** `core/database/migrations/` は空で、`db:migrate` は「未適用なし」を返します。新規インストールは方法A・方法Bを使ってください。
-
-1.0.0 の公開後、スキーマ変更を伴うリリースには前進専用のマイグレーションが付きます。そのときの手順は次の通りです。
+スキーマ変更を伴うリリースには、`core/database/migrations/` に前進専用のマイグレーションが付きます（[差分マイグレーション](#diff-migrations)を参照）。手順はどのリリースでも同じです。
 
 ```bash
 # 1. まず DB とファイルをバックアップ
@@ -309,7 +314,7 @@ curl -o /dev/null -s -w "%{http_code}\n" https://example.com/storage/
 | `tool:key` | HMAC・暗号化用の `base64:` エンコード `APP_KEY` を生成 |
 | `tool:hash "pw"` | `SUPER_USER_PASSWORD_HASH` 用の bcrypt/argon2id ハッシュを生成 |
 | `db:install` | **新規インストール。** `schema.{driver}.sql`（フルスキーマ＋シード）を適用。末尾の baseline INSERT が `V001000000` を記録し、DBは即「最新」状態になる |
-| `db:migrate` | **アップグレード（公開後）。** `schema_migrations` に未記録の `V…` のみを昇順・前進専用で適用し、各々を実 SHA-256 で記録 |
+| `db:migrate` | **アップグレード。** `schema_migrations` に未記録の `V…` のみを昇順・前進専用で適用し、各々を実 SHA-256 で記録 |
 | `db:status` | レポート：**DBの版 vs `SCHEMA_VERSION`（コード）vs ドライバ**、未適用マイグレーション一覧＋実行コマンド、checksum 検証（`BASELINE` はスキップ） |
 
 ### キャッシュ & ビルド
@@ -321,7 +326,9 @@ curl -o /dev/null -s -w "%{http_code}\n" https://example.com/storage/
 | `lang:rebuild [locale]` | 指定ロケール（または全ロケール）のMUIビューキャッシュを削除し再焼き付けを強制 |
 | `assets:rebuild` | テーマCSS/JS編集後、全FPC＋ビューキャッシュをパージし CSP ハッシュを再計算 |
 | `authors:rebuild` | `authors.cache.php` を再生成し、影響を受ける記事FPCをパージ |
-| `posts:recompile` | 全記事で Markdown → HTML ＋ サニタイザを再実行（サニタイザ規則更新後に使用） |
+| `posts:recompile` | 全記事で Markdown → HTML ＋ サニタイザを再実行（サニタイザ規則や `SPONSORED_NOTICE_TEXT` の変更後に使用） |
+| `blocks:rebuild` | `blocks.cache.php`（再利用ブロック）を再コンパイルし、全FPCをパージ |
+| `links:rebuild` | `links.cache.php`（`/go/` の別名表）を再コンパイル |
 | `media:gc [--days=N]` | `attachments` のどの行も参照しておらず N 日以上古い `storage/upload/` の孤児ドラフトメディアを回収（既定7日）。`{ab}/{cd}/` シャードを再帰走査 |
 | `media:reshard [--dry-run]` | 既存のフラット配置を `{ab}/{cd}/` 2階層へ移行：ファイル移動＋本文/アイキャッチの公開URLをフラット→シャードへ書換し、検索インデックス・一覧FPC・サイトマップ・フィードを再生成。冪等 |
 | `cache:purge-category {id}` | あるカテゴリの全記事FPCをパージ（精密クリーンアップ） |
@@ -473,7 +480,9 @@ HBP は `core/permissions.php` に定義し `core/Gate.php` で強制する**静
 | `comment:moderate` | コメントの承認 / スパム化 / 削除 | ✅ | ✅ | ❌ | ❌ |
 | `media:manage` | メディアのアップロード / 削除 | ✅ | ✅ | ✅ (own) | ❌ |
 | `taxonomy:manage` | カテゴリ＆タグの作成 / 編集 / 削除 | ✅ | ✅ | ❌ | ❌ |
-| `nav:manage` | ナビメニュー＆サイドバーウィジェットの編集 | ✅ | ❌ | ❌ | ❌ |
+| `nav:manage` | ナビメニュー＆ウィジェットの編集（生 HTML ウィジェットは `post:raw_html` も必要） | ✅ | ❌ | ❌ | ❌ |
+| `blocks:manage` | 再利用ブロックの作成・編集・削除 | ✅ | ❌ | ❌ | ❌ |
+| `links:manage` | `/go/` リンクの管理 | ✅ | ❌ | ❌ | ❌ |
 | `maintenance:run` | キャッシュ/sitemap/feeds の再構築（管理画面 → メンテナンス） | ✅ | ❌ | ❌ | ❌ |
 | `ip:manage` | 管理許可リスト＆公開ブロックリスト（A/B系）の管理 | ✅ | ❌ | ❌ | ❌ |
 | `plugin:manage` | プラグインのインストール / 有効化 / 無効化 / 削除 | ✅ | ❌ | ❌ | ❌ |
@@ -529,7 +538,9 @@ hayabusapress/
 │   ├── TranslationCompiler.php # 翻訳グループの hreflang_cache 同期
 │   ├── SecurityHeaderCompiler.php  # CSP + HSTS + 補助ヘッダ（事前コンパイル）
 │   ├── MenuCompiler.php        # 6ロケーションナビHTMLコンパイラ
-│   ├── SidebarCompiler.php     # サイドバーウィジェットHTMLコンパイラ（言語別）
+│   ├── SidebarCompiler.php     # ウィジェットHTMLコンパイラ（6エリア・言語別）
+│   ├── BlockCompiler.php       # 再利用ブロック → blocks.cache.php（FPC 書き込み時に展開）
+│   ├── LinkCompiler.php        # /go/{alias} → links.cache.php（DBを引かずに 302）
 │   ├── CommentCompiler.php     # 承認済みコメントキャッシュ + FPC + サイドバー同期
 │   ├── SeoCompiler.php         # SEO/解析タグコンパイラ
 │   ├── SiteFileCompiler.php    # sitemap.xml（インデックス + 分割）/ robots.txt 生成
@@ -547,7 +558,7 @@ hayabusapress/
 │   ├── Installer.php           # 組み込みインストーラ（隠蔽型・.env 不在時のみ起動）
 │   ├── AdminPostController.php # 記事保存オーケストレータ
 │   ├── AdminUserController.php # スタッフ + 2FA 管理
-│   ├── permissions.php         # 静的 RBAC マトリクス（15権限 × 4ロール）
+│   ├── permissions.php         # 静的 RBAC マトリクス（17権限 × 4ロール）
 │   ├── cli.php                 # CLI エントリポイント
 │   │
 │   ├── controllers/
@@ -576,6 +587,8 @@ hayabusapress/
 │   │   ├── comments.tpl.php
 │   │   ├── menu.tpl.php
 │   │   ├── sidebar.tpl.php
+│   │   ├── blocks.tpl.php
+│   │   ├── links.tpl.php
 │   │   ├── categories.tpl.php
 │   │   ├── tags.tpl.php
 │   │   ├── plugins.tpl.php
@@ -627,6 +640,9 @@ hayabusapress/
 │       ├── sidebar_{location}_{lang}.cache.php
 │       ├── widget_archive_{lang}.cache.php
 │       ├── widget_comments_{lang}.cache.php
+│       ├── blocks.cache.php        # 再利用ブロック
+│       ├── links.cache.php         # /go/ の別名表
+│       ├── plugin_snippets.cache.php
 │       ├── pages/                  # FPC: {lang}_{type}_{slug}.html（+ _p{n} 派生）
 │       │   └── .locks/             # スタンピードロックファイル
 │       └── views/                  # MUI焼き込み済みビューキャッシュ
@@ -669,18 +685,19 @@ HBP はスキーマ状態を `schema_migrations` テーブルで追跡し、シ�
 | 1.2.5 | `V001002005` |
 | 2.0.0 | `V002000000` |
 
-#### baseline：フルスキーマのみ・1.0.0 固定
+#### baseline：フルスキーマ・下限は 1.0.0 固定
 
-**1.0.0 はフルスキーマファイル（`schema.mysql.sql` / `schema.pgsql.sql`）だけを配布し、差分マイグレーションを持ちません。** 最初のリリースであり、前進させるべき旧版のDBが存在しないためです。baseline は **`V001000000`（version 1.0.0）固定**。各フルスキーマファイルの末尾に、この行を記録する **baseline INSERT** が入っています：
+フルスキーマファイル（`schema.mysql.sql` / `schema.pgsql.sql`）は常に**最新の**スキーマを表します。差分マイグレーションの内容もすべて畳み込んであります。下限は最初のリリースである **`V001000000`（version 1.0.0）固定**です。各フルスキーマファイルの末尾には、下限と**そのファイルが既に含む差分すべて**を記録する **baseline INSERT** が入っています：
 
 ```sql
 -- schema.{driver}.sql の末尾
 INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
-  VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>);
+  VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>),
+         ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>);
 ```
 
 - `checksum = 'BASELINE'` は「この行は差分マイグレーションではなくフルスキーマ由来」を示す番兵値 — checksum 検証は `BASELINE` 行をスキップします。
-- `db:install` はこの INSERT を**含めて**フルスキーマを適用するため、新規DBは即座に `V001000000` = 完全に最新と報告します。`db:migrate` は正しく**未適用なし**を返します（既存カラムを再 `ADD` しようとして事故ることがない）。
+- `db:install` はこの INSERT を**含めて**フルスキーマを適用するため、新規DBは即座に現行版（`V001003000`）= 完全に最新と報告します。`db:migrate` は正しく**未適用なし**を返します（既存カラムを再 `ADD` しようとして事故ることがない）。
 
 #### 3つの保証
 
@@ -690,9 +707,16 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | **`SCHEMA_VERSION` 定数**（`core/Schema.php`） | *コード*が期待する版。起動時/CLI で最新適用行と比較し、不一致（コード vs DB ドリフト）を警告。 |
 | **`db:status` レポート** | DBの版・コードが期待する版・ドライバ・未適用マイグレーション（実行すべきコマンド付き）を表示 — 「どこまで移行すればよいか」が一目で分かる。 |
 
-#### 1.0.1 以降の差分マイグレーション
+<a id="diff-migrations"></a>
+#### 差分マイグレーション
 
-スキーマ変更を伴うリリースでは、差分ファイルを `migrations/` 配下に **`V<major><minor><patch>__description.<driver>.sql`**（例：`V001001000__add_x.mysql.sql`）の名前で追加し、`V…` の昇順・前進専用で適用します。`db:migrate` は `schema_migrations` に無い `V…` を適用し、各々をファイルの実 SHA-256 で記録します（後の改竄を検知可能）。固定 `V001000000` baseline は下限として据え置かれます。
+スキーマ変更を伴うリリースでは、差分ファイルを `migrations/` 配下に **`V<major><minor><patch>__description.<driver>.sql`**（例：`V001003000__widgets_layouts_links.mysql.sql`）の名前で追加し、`V…` の昇順・前進専用で適用します。`db:migrate` は `schema_migrations` に無い `V…` を適用し、各々をファイルの実 SHA-256 で記録します（後の改竄を検知可能）。固定 `V001000000` baseline は下限として据え置かれます。
+
+フルスキーマは常に最新版を表し、各差分を `BASELINE` 行として記録するので、新規インストールで差分が再適用されることはありません。
+
+| 版 | マイグレーション | 内容 |
+|---|---|---|
+| 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`、`posts.layout` / `show_toc` / `is_sponsored`、新テーブル `blocks` と `links` |
 
 > これは HBP の憲法の範囲内に収まります：純PHP + PDO、生SQL、外部ツールゼロ（Flyway/Liquibase なし）。新規インストールの正規経路は常にフルスキーマファイルです。
 
@@ -709,10 +733,12 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 7 | `sessions` | DBセッション保存 |
 | 8 | `comments` | 承認ワークフロー付きコメント（`author_email` は NULL 許容＝メールは任意） |
 | 9 | `navigation_menus` | 6ロケーションのナビゲーション項目 |
-| 10 | `sidebar_widgets` | サイドバーウィジェット構成 |
+| 10 | `sidebar_widgets` | ウィジェット構成：エリア・並び順・任意の `title`・種類ごとの `settings`（JSON） |
 | 11 | `auth_throttle` | ログイン / 2FA レート制限 |
 | 12 | `blocked_ips` | POST型スパムIPブロックリスト |
 | 13 | `schema_migrations` | checksum 検証付きマイグレーション追跡 |
+| 14 | `blocks` | 再利用ブロック（`slug` ＋ `lang` で一意・本文は Markdown） |
+| 15 | `links` | リンク管理（`alias` で一意 → `target_url`） |
 
 ### `posts` テーブルの主要カラム
 
@@ -728,6 +754,9 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | `hreflang_cache` | 兄弟URLの JSON、保存時に焼き付け |
 | `featured_image` | アイキャッチ相対パス。`NULL` ならフォールバック（本文先頭画像 → サイトロゴ）を**保存時に解決**。`og:image` を駆動 |
 | `featured_image_alt` | アイキャッチ代替テキスト（a11y/SEO） |
+| `layout` | テーマのレイアウトID（`NULL` ＝テーマの既定。未知のIDも既定に戻る） |
+| `show_toc` | 保存時に目次を入れる |
+| `is_sponsored` | 広告・PR 表記を出し、外部リンクを `rel="sponsored"` にする |
 | `user_id` | `NULL` = Super User。`ON DELETE RESTRICT` — スタッフ削除前に再割り当てが必要 |
 
 > インデックス `idx_posts_schedule (status, published_at)` が `WHERE status='scheduled' AND published_at <= NOW()` の検索を駆動。全一覧インデックスは `published_at DESC` でソート。
@@ -756,7 +785,7 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 下書きメディア漏洩 | `storage/upload/` — Webサーバーが全拒否、PHP仲介配信のみ。アップロードも同じ隔離 ＋ `media:manage` ゲートに従う。**非公開化でメディアを `storage/upload/` へ逆移動**し、非公開記事のメディアが Web到達不可になる |
 | `.env` 漏洩（共有レンタル） | 方式B（本体を公開ルート外）/ 方式A（`.htaccess`）＋ bootstrap 自己防衛 ＋ インストーラ自己診断 |
 | XML-RPC 攻撃 | ファイルが存在しない — 一行も書いていない |
-| 権限昇格 | 静的 RBAC（`Gate::can()`・`permissions.php`） — 15権限 × 4ロール；所有権スコープのチェック；Super User は `.env` のみ |
+| 権限昇格 | 静的 RBAC（`Gate::can()`・`permissions.php`） — 17権限 × 4ロール；所有権スコープのチェック；Super User は `.env` のみ |
 | Super User の DB 露出 | Super User は `.env` のみ；DB侵害でルート認証情報は得られない |
 
 ### コンテンツセキュリティポリシー（CSP）
@@ -774,6 +803,16 @@ CSP_MODE=enforce       # ステップ2: ログがクリーンになってから
 ```bash
 php core/cli.php assets:rebuild   # SHA-256 ハッシュを再計算 ＋ FPC をパージ
 ```
+
+外部ホストの許可は明示的に追加する方式で、カンマ区切りで並べます（書式の誤った項目はエラーログに警告を出して無視します）。
+
+```ini
+CSP_IMG_HOSTS="pics.example.com,*.cdn.example.net"   # img-src（提携先のバナーなど）
+CSP_SCRIPT_HOSTS=""                                  # <script src> 用の script-src。必要なときだけ
+EMBED_HOSTS="www.youtube-nocookie.com,player.vimeo.com"  # frame-src
+```
+
+プラグインの静的断片と生 HTML ウィジェットに含まれるインラインの `<script>` / `<style>` は、コンパイル時に自動でハッシュへ加わります。手で列挙する必要はありません。**`style="…"` 属性はハッシュの対象にならず、`enforce` ではブロックされる**ので、テーマや断片ではクラスを使ってください。
 
 ### 管理画面CSS（本番）
 
@@ -811,6 +850,27 @@ php core/cli.php assets:rebuild   # SHA-256 ハッシュを再計算 ＋ FPC を
 }
 ```
 
+### 静的な HTML 断片（snippets）
+
+プラグインは、全公開ページの `<head>` 内と `<body>` 末尾に固定の HTML を足せます。
+
+```json
+"snippets": {
+  "head": "snippets/head.html",
+  "body_end": "snippets/body_end.html"
+}
+```
+
+ファイルは `plugins:rebuild` のときに1回だけ読み（1ファイル 64 KiB まで・プラグインのディレクトリ内に限る）、ページキャッシュへ焼き込みます。リクエストごとに PHP は走りません。断片内のインラインの `<script>` / `<style>` は CSP のハッシュに自動で加わります。
+
+テーマは、断片の出力位置とウィジェットエリアを自分で出力する必要があります。
+
+```php
+<?php echo PluginManager::snippet('head'); ?>        <!-- </head> の直前 -->
+<?php echo PluginManager::snippet('body_end'); ?>    <!-- </body> の直前 -->
+{{{ SidebarCompiler::areaFor('content_before', $lang ?? '', $layout ?? null) }}}
+```
+
 ### 3つの鉄則
 
 1. **実行時I/Oスキャン禁止** — `glob()` / `scandir()` をリクエストごとに走らせない。発見はすべてコンパイル時（`plugins:rebuild`）。
@@ -845,6 +905,7 @@ class MyPlugin
 |---|---|
 | `before_comment_create` | コメントコントローラ、DB INSERT 前 |
 | `before_contact_send` | 問い合わせフォームプラグイン、`mb_send_mail()` 前 |
+| `post_saved` | 記事・固定ページの保存の最後、全キャッシュの再生成後（通知のみ。保存は取り消せない） |
 
 ### 同梱プラグイン
 

@@ -12,7 +12,8 @@ class MenuCompiler
 {
     private const CACHE_FILE = STORAGE_PATH . '/cache/menus.cache.php';
 
-    private const LOCATIONS = [
+    /** Also the allowlist for the sidebar 'menu' widget. */
+    public const LOCATIONS = [
         'pc_header', 'pc_sidebar_left', 'pc_sidebar_right',
         'pc_footer', 'sp_header', 'sp_footer',
     ];
@@ -35,6 +36,9 @@ class MenuCompiler
             "<?php\n// HBP Compiled Menus\nreturn {$export};\n",
             LOCK_EX
         );
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate(self::CACHE_FILE, true);   // see SidebarCompiler::forgetCompiled()
+        }
     }
 
     private static function buildHtml(array $items, string $location): string

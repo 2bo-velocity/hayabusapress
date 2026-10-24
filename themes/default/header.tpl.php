@@ -39,8 +39,13 @@ if (!empty($post['hreflang'])) {
     }
 }
 ?>
+<?php echo PluginManager::snippet('head'); ?>
 </head>
-<body>
+<?php
+// $layout comes from a post/page (posts.layout); listings and plugin pages use the theme default.
+$layout = $layout ?? ThemeManager::layout(null);
+?>
+<body<?php if ($layout['body_class'] !== ''): ?> class="{{ $layout['body_class'] }}"<?php endif; ?>>
 
 <header class="hbp-header">
     <div class="hbp-container">
@@ -62,7 +67,7 @@ if (!empty($post['hreflang'])) {
             echo '</div>';
         }
         ?>
-        <button class="hbp-hamburger" id="hamburgerBtn" onclick="toggleSpMenu()" aria-label="{@ menu_aria @}">
+        <button type="button" class="hbp-hamburger" id="hamburgerBtn" aria-label="{@ menu_aria @}" aria-controls="spMenu" aria-expanded="false">
             <span></span><span></span><span></span>
         </button>
     </div>
@@ -72,6 +77,8 @@ if (!empty($post['hreflang'])) {
 <div id="spMenu" class="hbp-sp-menu" hidden>
     {{{ $menus['sp_header'] ?? '' }}}
 </div>
+
+{{{ SidebarCompiler::areaFor('header_below', $lang ?? '', $layout) }}}
 
 <div class="hbp-container hbp-layout">
     <main class="hbp-main">
