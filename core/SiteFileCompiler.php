@@ -63,7 +63,8 @@ class SiteFileCompiler
         $buffer      = [];   // <url> lines for the chunk currently being built
         $split       = false; // have we had to start splitting?
 
-        foreach (['post', 'page'] as $type) {
+        // 'series' = the tables of contents of series with at least one published post
+        foreach (['post', 'page', 'series'] as $type) {
             $chunkNo = 0;
             foreach (self::streamPublished($type) as $row) {
                 $line = self::buildUrlLine($siteUrl, $defaultLang, $row, $now);
@@ -133,14 +134,23 @@ class SiteFileCompiler
     {
         $lastId = 0;
         while (true) {
-            $rows = DB::fetchAll(
-                "SELECT id, type, lang, slug, updated_at
-                   FROM posts
-                  WHERE status = 'published' AND deleted_at IS NULL AND type = ? AND id > ?
-                  ORDER BY id ASC
-                  LIMIT " . self::FETCH_BATCH,
-                [$type, $lastId]
-            );
+            $rows = $type === 'series'
+                ? DB::fetchAll(
+                    "SELECT id, 'series' AS type, lang, slug, updated_at
+                       FROM series
+                      WHERE post_count > 0 AND id > ?
+                      ORDER BY id ASC
+                      LIMIT " . self::FETCH_BATCH,
+                    [$lastId]
+                )
+                : DB::fetchAll(
+                    "SELECT id, type, lang, slug, updated_at
+                       FROM posts
+                      WHERE status = 'published' AND deleted_at IS NULL AND type = ? AND id > ?
+                      ORDER BY id ASC
+                      LIMIT " . self::FETCH_BATCH,
+                    [$type, $lastId]
+                );
             if ($rows === []) {
                 return;
             }
@@ -219,7 +229,7 @@ class SiteFileCompiler
             return '';
         }
         $lastmod  = htmlspecialchars(substr((string)($post['updated_at'] ?? $now), 0, 10), ENT_QUOTES, 'UTF-8');
-        $priority = ($post['type'] ?? '') === 'post' ? '0.8' : '0.6';
+        $priority = match ($post['type'] ?? '') { 'post' => '0.8', 'series' => '0.7', default => '0.6' };
         return "  <url><loc>{$url}</loc><lastmod>{$lastmod}</lastmod><priority>{$priority}</priority></url>\n";
     }
 
@@ -232,9 +242,11 @@ class SiteFileCompiler
             return '';
         }
         $langPrefix = $postLang === $defaultLang ? '' : "/{$postLang}";
-        $path       = $post['type'] === 'post'
-            ? "{$langPrefix}/post/{$slug}"
-            : "{$langPrefix}/page/{$slug}";
+        $path       = match ($post['type']) {
+            'post'   => "{$langPrefix}/post/{$slug}",
+            'series' => "{$langPrefix}/post/series/{$slug}",
+            default  => "{$langPrefix}/page/{$slug}",
+        };
         return htmlspecialchars($siteUrl . $path, ENT_QUOTES, 'UTF-8');
     }
 

@@ -147,7 +147,7 @@ class YourPluginClass
 |---|---|---|
 | `before_comment_create` | コメント受付コントローラーのDB接続前 | `post_data`, `ip_address` |
 | `before_contact_send` | お問い合わせプラグインのメール送出前 | `post_data`, `ip_address` |
-| `post_saved` | 記事・固定ページの保存の最後（DB確定・キャッシュ再生成の後）。遮断できない通知 | `post_id`, `type`, `lang`, `slug`, `status`, `is_new` |
+| `post_saved` | 記事・固定ページの保存の最後（DB確定・キャッシュ再生成の後）。遮断できない通知 | `post_id`, `type`, `lang`, `slug`, `status`, `is_new`, `series_id`（1.5.0〜。連載外・固定ページは `null`） |
 
 ---
 

@@ -22,6 +22,14 @@ class AdminPostController
      */
     public const TITLE_MAX = 255;
 
+    /** Set by save() when the chosen series was of another language and was left out. */
+    private static bool $seriesDropped = false;
+
+    public static function seriesDropped(): bool
+    {
+        return self::$seriesDropped;
+    }
+
     /**
      * Post listing (with search, filtering, pagination)
      * $opts receives normal/trash view switching, various filters, and paging.
@@ -29,7 +37,7 @@ class AdminPostController
      *
      * @param array $opts {
      *   view: 'active'|'trash', q: string (title partial match), type: 'post'|'page',
-     *   status: 'published'|'draft'|'scheduled', category_id: int, tag_id: int,
+     *   status: 'published'|'draft'|'scheduled', category_id: int, tag_id: int, series_id: int,
      *   pub_from/pub_to: publish-time range (YYYY-MM-DD), cre_from/cre_to: created-time range,
      *   page: int
      * }
@@ -65,6 +73,10 @@ class AdminPostController
         if (!empty($opts['category_id'])) {
             $where[]  = 'category_id = ?';
             $params[] = (int)$opts['category_id'];
+        }
+        if (!empty($opts['series_id'])) {
+            $where[]  = 'series_id = ?';
+            $params[] = (int)$opts['series_id'];
         }
         if (!empty($opts['tag_id'])) {
             $where[]  = 'EXISTS (SELECT 1 FROM post_tags pt WHERE pt.post_id = posts.id AND pt.tag_id = ?)';
@@ -129,6 +141,7 @@ class AdminPostController
         }
 
         $categories = DB::fetchAll('SELECT id, type, lang, name FROM categories ORDER BY lang, type, name');
+        $seriesList = DB::fetchAll('SELECT id, lang, title FROM series ORDER BY lang, title');
         $tags       = DB::fetchAll('SELECT id, type, lang, name FROM tags ORDER BY lang, type, name');
         $selectedTags = [];
 
@@ -240,6 +253,12 @@ class AdminPostController
             'nextFreeSlot'   => (function () use ($post) { require_once CORE_PATH . '/PublishSlots.php'; return !empty($post['id']) ? PublishSlots::nextFree() : null; })(),
             'redirects'      => $post ? (function () use ($post) { require_once CORE_PATH . '/RedirectCompiler.php'; return RedirectCompiler::forPost((int)$post['id']); })() : [],
             'categories'     => $categories,
+            'seriesList'     => $seriesList,
+            // Chapter headings already used in this post's series, offered as suggestions
+            'seriesParts'    => !empty($post['series_id']) ? array_column(DB::fetchAll(
+                'SELECT DISTINCT series_part FROM posts WHERE series_id = ? AND series_part IS NOT NULL ORDER BY series_part',
+                [(int)$post['series_id']]
+            ), 'series_part') : [],
             'tags'           => $tags,
             'selected_tags'  => $selectedTags,
             'contentLocales' => class_exists('HbpLocale') ? HbpLocale::getAvailableContentLocales() : ['ja' => 'JA', 'en' => 'EN'],
@@ -338,6 +357,28 @@ class AdminPostController
         $slug      = self::buildSlug($input['slug'] ?? '', $title, $type, $lang, $postId, $scheduledAt);
         $catId     = !empty($input['category_id']) ? (int)$input['category_id'] : null;
 
+        // Series: posts only, and only a series of the post's own language. Anything else is dropped
+        // (and reported to the editor) rather than stored, because the series pages are per language.
+        self::$seriesDropped = false;
+        $seriesId   = $type === 'post' && !empty($input['series_id']) ? (int)$input['series_id'] : null;
+        $seriesPart = null;
+        $seriesOrder = 0;
+        if ($seriesId !== null) {
+            require_once CORE_PATH . '/Series.php';
+            $seriesRow = DB::fetchOne('SELECT id, lang FROM series WHERE id = ? LIMIT 1', [$seriesId]);
+            if (!$seriesRow || $seriesRow['lang'] !== $lang) {
+                self::$seriesDropped = $seriesRow !== false;
+                $seriesId = null;
+            } else {
+                $seriesPart = Series::cleanPart($input['series_part'] ?? null);
+                // Keep the position while the post stays in the same series; join at the end otherwise
+                $prevSeries  = $postId > 0 ? DB::fetchOne('SELECT series_id, series_order FROM posts WHERE id = ? LIMIT 1', [$postId]) : null;
+                $seriesOrder = $prevSeries && (int)($prevSeries['series_id'] ?? 0) === $seriesId
+                    ? (int)$prevSeries['series_order']
+                    : Series::nextOrder($seriesId);
+            }
+        }
+
         // Flags
         $allowComment     = isset($input['allow_comment'])     ? 1 : 0;
         $showRelatedPosts = isset($input['show_related_posts']) ? 1 : 0;
@@ -395,6 +436,8 @@ class AdminPostController
         // Description used when meta_description is left empty (SeoCompiler::buildMeta)
         $metaDescAuto = SeoCompiler::excerpt($contentHtml);
         $metaDescAuto = $metaDescAuto !== '' ? mb_substr($metaDescAuto, 0, 255) : null;
+        // Character count and reading time of what the reader will see
+        [$charCount, $readingMinutes] = PostCompiler::textStats($contentHtml);
 
         // Social-post text: typed (kept as typed, NULL when empty) and generated (always refreshed)
         $shareText = trim(str_replace(["\r\n", "\r"], "\n", (string)($input['share_text'] ?? '')));
@@ -424,7 +467,9 @@ class AdminPostController
 
         // Capture the pre-change counter state (null for a brand-new post)
         require_once CORE_PATH . '/Counters.php';
+        require_once CORE_PATH . '/Series.php';
         $counterBefore = Counters::snapshot($postId);
+        $seriesBefore  = Series::snapshot($postId);
 
         // Remember this before the INSERT overwrites $postId, so the post_saved hook can tell
         // a first save from an edit.
@@ -434,7 +479,8 @@ class AdminPostController
             // New creation
             DB::execute(
                 'INSERT INTO posts
-                 (type, lang, slug, title, content_markdown, content_html, status, category_id,
+                 (type, lang, slug, title, content_markdown, content_html, char_count, reading_minutes,
+                  status, category_id, series_id, series_order, series_part,
                   tags_cache, allow_comment, show_related_posts,
                   show_share, meta_description, meta_keywords, meta_description_auto,
                   share_text, share_text_auto,
@@ -442,9 +488,10 @@ class AdminPostController
                   page_template, layout, trans_group,
                   featured_image, featured_image_alt,
                   comment_count, published_at, created_at, updated_at)
-                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)',
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?)',
                 [
-                    $type, $lang, $slug, $title, $markdown, $contentHtml, $status, $catId,
+                    $type, $lang, $slug, $title, $markdown, $contentHtml, $charCount, $readingMinutes,
+                    $status, $catId, $seriesId, $seriesOrder, $seriesPart,
                     $tagsCache, $allowComment, $showRelatedPosts,
                     $showShare, $metaDescription, $metaKeywords, $metaDescAuto,
                     $shareText, $shareAuto,
@@ -474,8 +521,9 @@ class AdminPostController
 
             DB::execute(
                 'UPDATE posts SET
-                   type=?, lang=?, slug=?, title=?, content_markdown=?, content_html=?, status=?,
-                   category_id=?, tags_cache=?, allow_comment=?, show_related_posts=?,
+                   type=?, lang=?, slug=?, title=?, content_markdown=?, content_html=?,
+                   char_count=?, reading_minutes=?, status=?,
+                   category_id=?, series_id=?, series_order=?, series_part=?, tags_cache=?, allow_comment=?, show_related_posts=?,
                    show_share=?, meta_description=?, meta_keywords=?, meta_description_auto=?,
                    share_text=?, share_text_auto=?,
                    show_author=?, show_toc=?, is_sponsored=?, raw_html_allowed=?, content_saved_by=?,
@@ -483,8 +531,9 @@ class AdminPostController
                    featured_image=?, featured_image_alt=?, published_at=?, updated_at=?
                  WHERE id=?',
                 [
-                    $type, $lang, $slug, $title, $markdown, $contentHtml, $status,
-                    $catId, $tagsCache, $allowComment, $showRelatedPosts,
+                    $type, $lang, $slug, $title, $markdown, $contentHtml,
+                    $charCount, $readingMinutes, $status,
+                    $catId, $seriesId, $seriesOrder, $seriesPart, $tagsCache, $allowComment, $showRelatedPosts,
                     $showShare, $metaDescription, $metaKeywords, $metaDescAuto,
                     $shareText, $shareAuto,
                     $showAuthor, $showToc, $isSponsored, $allowRawHtml ? 1 : 0, $contentSavedBy,
@@ -524,6 +573,8 @@ class AdminPostController
 
         // Move categories.post_count / tags.post_count by the delta this save caused
         Counters::applyPostChange($counterBefore, Counters::snapshot($postId));
+        // Series: counters cache, neighbours and table of contents of the old and new position
+        Series::applyPostChange($seriesBefore, Series::snapshot($postId));
 
         // Translation-group sync (recompute hreflang_cache)
         if ($transGroup !== '' && class_exists('TranslationCompiler')) {
@@ -594,12 +645,13 @@ class AdminPostController
         }
 
         self::firePostSaved([
-            'post_id' => $postId,
-            'type'    => $type,
-            'lang'    => $lang,
-            'slug'    => $slug,
-            'status'  => $status,
-            'is_new'  => $isNew,
+            'post_id'   => $postId,
+            'type'      => $type,
+            'lang'      => $lang,
+            'slug'      => $slug,
+            'status'    => $status,
+            'is_new'    => $isNew,
+            'series_id' => $seriesId,
         ]);
 
         return $postId;
@@ -616,7 +668,7 @@ class AdminPostController
      * throwing listener is contained here: the content is already stored, and letting a plugin's
      * failure bubble up would show the author an error for a save that actually succeeded.
      *
-     * @param array{post_id:int,type:string,lang:string,slug:string,status:string,is_new:bool} $context
+     * @param array{post_id:int,type:string,lang:string,slug:string,status:string,is_new:bool,series_id:?int} $context
      */
     private static function firePostSaved(array $context): void
     {
@@ -673,7 +725,9 @@ class AdminPostController
         }
 
         require_once CORE_PATH . '/Counters.php';
+        require_once CORE_PATH . '/Series.php';
         $counterBefore = Counters::snapshot($postId);
+        $seriesBefore  = Series::snapshot($postId);
 
         $now = gmdate('Y-m-d H:i:s');
         DB::execute(
@@ -681,6 +735,7 @@ class AdminPostController
             [$now, $now, $postId]
         );
         Counters::applyPostChange($counterBefore, Counters::snapshot($postId));
+        Series::applyPostChange($seriesBefore, Series::snapshot($postId));
 
         // Carry the unpublish onto the junction rows so the tag listing stops returning it
         require_once CORE_PATH . '/PostTagIndex.php';
@@ -709,11 +764,14 @@ class AdminPostController
             return;
         }
         require_once CORE_PATH . '/Counters.php';
+        require_once CORE_PATH . '/Series.php';
         $counterBefore = Counters::snapshot($postId);
+        $seriesBefore  = Series::snapshot($postId);
 
         $now = gmdate('Y-m-d H:i:s');
         DB::execute('UPDATE posts SET deleted_at = NULL, updated_at = ? WHERE id = ?', [$now, $postId]);
         Counters::applyPostChange($counterBefore, Counters::snapshot($postId));
+        Series::applyPostChange($seriesBefore, Series::snapshot($postId));
 
         // Keep the junction rows aligned with the post row (restore leaves status at draft)
         require_once CORE_PATH . '/PostTagIndex.php';
@@ -807,7 +865,9 @@ class AdminPostController
 
         // Snapshot before the row (and its post_tags rows, via FK CASCADE) disappears
         require_once CORE_PATH . '/Counters.php';
+        require_once CORE_PATH . '/Series.php';
         $counterBefore = Counters::snapshot($postId);
+        $seriesBefore  = Series::snapshot($postId);
 
         DB::execute('DELETE FROM posts WHERE id = ?', [$postId]);
         // slug_redirects rows go with the post (ON DELETE CASCADE); rebuild the compiled map
@@ -816,6 +876,7 @@ class AdminPostController
 
         // snapshot() now returns null, which is exactly "contributes nothing"
         Counters::applyPostChange($counterBefore, Counters::snapshot($postId));
+        Series::applyPostChange($seriesBefore, null);
 
         // Delete the comment cache
         $cacheFile = STORAGE_PATH . '/comments/' . $postId . '.cache.php';

@@ -17,5 +17,6 @@ return [
     'hbp-contact.sent'          => '送信しました。ありがとうございます。',
     'hbp-contact.required'      => 'すべての項目を入力してください。',
     'hbp-contact.invalid_email' => 'メールアドレスの形式が正しくありません。',
+    'hbp-contact.too_long'      => 'メッセージが長すぎます（10,000 文字まで）。',
     'hbp-contact.failed'        => '送信に失敗しました。しばらくしてからお試しください。',
 ];

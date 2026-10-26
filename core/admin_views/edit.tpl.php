@@ -28,6 +28,9 @@ $selTags   = $selected_tags ?? [];
         {@ raw_html_strip_warning @}
     </div>
     <?php endif; ?>
+    <?php if (!empty($_GET['series_lang'])): ?>
+    <div class="mb-4 p-3 rounded-xl bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-sm">{@ series_lang_dropped @}</div>
+    <?php endif; ?>
     <?php if (!empty($_GET['card_missing']) && preg_match('/^[a-z0-9,-]+$/', (string)$_GET['card_missing'])): ?>
     <div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">
         <?= str_replace(':slugs', htmlspecialchars(str_replace(',', ', ', (string)$_GET['card_missing']), ENT_QUOTES, 'UTF-8'), '{@ card_missing @}') ?>
@@ -282,6 +285,26 @@ $selTags   = $selected_tags ?? [];
                     {% endforeach %}
                 </select>
             </div>
+
+            <!-- Series (posts only; the server drops a series of another language) -->
+            <?php if (($post['type'] ?? 'post') === 'post' && !empty($seriesList)): ?>
+            <div class="bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-4">
+                <label class="block text-xs font-medium text-slate-500 mb-2">{@ series @}</label>
+                <select name="series_id" class="w-full text-sm px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+                    <option value="">{@ none @}</option>
+                    {% foreach $seriesList as $sr %}
+                    <option value="{{ $sr['id'] }}" {% if (int)($post['series_id'] ?? 0) === (int)$sr['id'] %}selected{% endif %}>{{ $sr['title'] }} ({{ $sr['lang'] }})</option>
+                    {% endforeach %}
+                </select>
+                <label class="block text-xs font-medium text-slate-500 mt-3 mb-2">{@ series_part @}</label>
+                <input type="text" name="series_part" maxlength="100" list="seriesParts" value="{{ $post['series_part'] ?? '' }}"
+                       class="w-full text-sm px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+                <datalist id="seriesParts">
+                    {% foreach $seriesParts as $sp %}<option value="{{ $sp }}">{% endforeach %}
+                </datalist>
+                <p class="text-xs text-slate-400 mt-2">{@ series_post_hint @}</p>
+            </div>
+            <?php endif; ?>
 
             <!-- Tags -->
             <div class="bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-4">

@@ -21,5 +21,6 @@ return [
     'hbp-contact.sent'          => 'Your message has been sent. Thank you!',
     'hbp-contact.required'      => 'Please fill in all required fields.',
     'hbp-contact.invalid_email' => 'Please enter a valid email address.',
+    'hbp-contact.too_long'      => 'The message is too long (10,000 characters at most).',
     'hbp-contact.failed'        => 'Failed to send message. Please try again later.',
 ];

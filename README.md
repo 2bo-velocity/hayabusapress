@@ -43,7 +43,7 @@ Every design decision answers one question: *can we pre-compute this so the fron
 | **Split-pane Markdown editor** | Separate title/body inputs; plain-text body (no in-place rich conversion) with a side-by-side live preview sharing the server-side `MarkdownCompiler`. Drag-and-drop image upload, autosave, ruby/emphasis toolbar. |
 | **Attachment list & delete** | A thumbnail list of the editing content's attachments (`attachments` rows) below the body field. Insert any image into the body at the cursor, or **physically delete** it (confirmation required; warning is strengthened if the file is still referenced in the body). The body `![]()` is **never auto-rewritten** (you remove broken links yourself). Delete API needs `media:manage` + CSRF; own content only without `post:edit_other`. |
 | **Character count** | Live character count at the top-left of the title and body fields, counted by **code point** (`[...str].length` — CJK and half-width each count as 1). Title has a hard 255-char cap warning (caution past 230); body shows a soft length guide (light / standard / comprehensive). Client-side only — zero server or FPC impact. |
-| **Widgets & areas** | 11 widget types (search, recent comments, archive, categories, tags, recent posts, hand-picked posts, Markdown text, image banner, raw HTML, menu) placed in 6 areas: right/left sidebar, below the header, before/after the body, and the footer. Each widget can take its own title. All compiled to per-area, per-language HTML at save time — an empty area emits nothing. |
+| **Widgets & areas** | 12 widget types (search, recent comments, archive, categories, tags, recent posts, hand-picked posts, Markdown text, image banner, raw HTML, menu, series) placed in 6 areas: right/left sidebar, below the header, before/after the body, and the footer. Each widget can take its own title. All compiled to per-area, per-language HTML at save time — an empty area emits nothing. |
 | **Per-post layouts** | A theme declares its layouts in `theme.json` (which areas each one shows, plus a `<body>` class); the editor offers them as a select. The bundled theme ships *Standard*, *Single column* and *Minimal*. |
 | **Table of contents** | Per-post toggle. Built from H2/H3 at save time and inserted before the first H2 (needs at least two H2s). Heading ids are de-duplicated. |
 | **Reusable blocks** | Write a block once in **Admin → Blocks**, place it in any post with a line `{{ block:slug }}`. Posts keep only a marker; the block is expanded when the page cache is written, so editing a block updates every post that uses it immediately — no re-save. |
@@ -52,8 +52,10 @@ Every design decision answers one question: *can we pre-compute this so the fron
 | **Sponsored disclosure** | Per-post "contains promotional content" toggle: a notice is printed at the top of the body (text configurable via `SPONSORED_NOTICE_TEXT`) and external links get `rel="sponsored"`. Links to `/go/` always carry `rel="sponsored nofollow"`. |
 | **Publishing slots & schedule** | Declare the times you publish every day (e.g. `07:00, 12:00, 21:00`) in the SEO settings. The editor offers them as buttons plus a *next free slot* shortcut, and **Admin → Schedule** lays scheduled/published posts out as days × slots with free slots highlighted. Admin-only — nothing runs on public pages. |
 | **Titles, descriptions & slugs** | A page-title format (`{title} \| {site}`). An empty description is filled at save time with a ~120-character excerpt of the body (`meta_description_auto`; the TOC and sponsored notice are skipped). An empty slug is generated from the title, the date/time (`20261024-0700`) or the post ID (`p123`); a title with no ASCII left falls back to date/time. |
-| **Structured data (JSON-LD)** | `BlogPosting` + `BreadcrumbList` on posts, `WebPage` on pages, `WebSite` on the top page — built while the page cache is written. `application/ld+json` is a data block, so the CSP needs no hash for it. |
-| **Distribution feeds** | JSON Feed 1.1 (`/feed.json`) next to Atom/RSS, and per-category feeds (`/feeds/{lang}/category/{slug}.{atom.xml,rss.xml,json}`) for categories with *feed* switched on. JSON items carry `_hbp.share_text`: a social-post text you type, or one generated at save time from title + description + the category's hashtags and sized to **X's weighted count** (CJK = 2, URL = 23) with room left for the link. |
+| **Series** | An ordered run of ordinary posts — a serialized story, a tutorial in parts. Each post shows its series and chapter above the body and *previous / contents / next* below it; the series gets a table of contents at `/post/series/{slug}` (chapter headings, characters per post, ongoing / completed / on hiatus, an optional cover and its own feed; `SERIES_PAGE_SIZE` × `SERIES_FPC_DEPTH` = 10,000 posts by default). Posts keep their own URLs and every other feature. Neighbours are looked up when the page cache is written (a one-row index range each), and a change purges only the post, its old and new neighbours and the table of contents. Managed in **Admin → Series** (order and chapters) and on each post's edit screen. |
+| **Character count & reading time** | Counted at save time from the rendered body — ruby readings, code, the TOC and the sponsored notice are left out — and stored on the post (`char_count`, `reading_minutes`). CJK characters are timed by characters per minute and the rest by words per minute, added together, so mixed-language posts get a sensible figure (`READING_SPEED_CJK` / `READING_SPEED_WORDS`). The bundled theme prints "N min read" (`SHOW_READING_TIME`). |
+| **Structured data (JSON-LD)** | `BlogPosting` + `BreadcrumbList` on posts (with `isPartOf` and the series in the breadcrumbs for a post of a series), `CreativeWorkSeries` on a series' table of contents, `WebPage` on pages, `WebSite` on the top page — built while the page cache is written. `application/ld+json` is a data block, so the CSP needs no hash for it. |
+| **Distribution feeds** | JSON Feed 1.1 (`/feed.json`) next to Atom/RSS, and per-category and per-series feeds (`/feeds/{lang}/category/{slug}.*`, `/feeds/{lang}/series/{slug}.*`) for categories and series with *feed* switched on. JSON items carry `_hbp.share_text`: a social-post text you type, or one generated at save time from title + description + the category's hashtags and sized to **X's weighted count** (CJK = 2, URL = 23) with room left for the link. |
 | **301 for renamed slugs** | Changing the slug of a published post keeps the old one; `/post/{old}` answers 301 to the current URL from a compiled array (no DB, never cached). Chains collapse, and a slug reused by another post wins over the redirect. |
 | **Post templates** | Starting points for new posts (title, body, category, tags, layout, TOC, sponsored flag; `{date}` → today). Using one **copies** it — editing the template later changes no existing post. |
 | **Callouts, speech bubbles & post cards** | `:::quote Source\|URL`, `:::box summary Title` and `:::say speaker` … `:::` wrap ordinary Markdown in a cited quote, a box or a speech bubble (speakers are registered in the admin). `{{ card:slug }}` bakes a card linking another published post. Wrappers are built after the sanitizer from validated arguments; the content inside is sanitized as usual. |
@@ -165,6 +167,10 @@ php core/cli.php system:init && php core/cli.php plugins:rebuild
 Upgrading to **1.4.0** (`V001004000`) adds one step between 3 and 4: run
 `php core/cli.php posts:recompile --reassess` once. It records, for every post, whether its body keeps
 raw HTML (from the author's current role) and fills the generated description and share text.
+
+Upgrading to **1.5.0** (`V001005000`) likewise adds `php core/cli.php posts:recompile` between 3 and 4: it
+fills in the character count and reading time of every existing post (series start empty, so nothing
+else needs backfilling).
 
 > **Step 4 varies by release.** Some schema changes need denormalized data backfilled before the site
 > reads correctly again — `tags:reindex` (post_tags listing keys) and `counters:rebuild`
@@ -349,14 +355,14 @@ per-category feeds under `/feeds/{lang}/category/`.
 | `lang:rebuild [locale]` | Delete MUI view caches for a locale (or all locales) to force re-bake |
 | `assets:rebuild` | Purge all FPC + view caches + recompile CSP hashes after theme CSS/JS edits |
 | `authors:rebuild` | Rebuild `authors.cache.php` + purge affected post FPCs |
-| `posts:recompile [--reassess [--user=ID]]` | Re-run Markdown → HTML + sanitizer on all posts with the raw-HTML trust recorded on each (use after updating sanitizer rules, `SPONSORED_NOTICE_TEXT`, a speaker, or a post a card points to). Also refreshes the generated description and share text. `--reassess` first resets that trust from the current role of whoever last saved each body (`--user=ID` limits it to one saver; `0` = Super User) |
+| `posts:recompile [--reassess [--user=ID]]` | Re-run Markdown → HTML + sanitizer on all posts with the raw-HTML trust recorded on each (use after updating sanitizer rules, `SPONSORED_NOTICE_TEXT`, a speaker, or a post a card points to). Also refreshes the generated description and share text, and recounts characters and reading time. `--reassess` first resets that trust from the current role of whoever last saved each body (`--user=ID` limits it to one saver; `0` = Super User) |
 | `blocks:rebuild` | Recompile `blocks.cache.php` (reusable blocks) and purge all FPC |
 | `links:rebuild` | Recompile `links.cache.php` (the `/go/` alias table) |
 | `media:gc [--days=N]` | Garbage-collect orphan draft media in `storage/upload/` not referenced by any `attachments` row, older than N days (default 7). Walks the `{ab}/{cd}/` shard tree |
 | `media:reshard [--dry-run]` | Migrate an existing flat media layout into the `{ab}/{cd}/` two-level shards: move files, rewrite body/featured-image public URLs flat→shard, then regenerate search index, list FPC, sitemap & feeds. Idempotent |
 | `cache:purge-category {id}` | Purge FPC for all posts in a category (precision cleanup) |
 | `config:rebuild` | Explicitly regenerate `env.cache.php` |
-| `feed:rebuild` | Regenerate the feeds of every language and every feed-enabled category (`FEED_ENABLED=true`) |
+| `feed:rebuild` | Regenerate the feeds of every language and every feed-enabled category and series (`FEED_ENABLED=true`) |
 | `posts:publish-due` | Promote `scheduled` posts whose `published_at` has arrived (cron / manual trigger) |
 | `schedule:recompile` | Recompute `next_schedule.php` (the next pseudo-cron fire time) |
 
@@ -589,6 +595,8 @@ hayabusapress/
 │   ├── LinkCompiler.php        # /go/{alias} → links.cache.php, served as a 302 without a DB query
 │   ├── RedirectCompiler.php    # Old slugs → redirects.cache.php, served as a 301 without a DB query
 │   ├── SpeakerCompiler.php     # :::say speakers → speakers.cache.php
+│   ├── Series.php              # Series: order, previous / next, precise purge of what a change touches
+│   ├── SeriesCompiler.php      # Series → series.cache.php (titles, status, counters)
 │   ├── PostCompiler.php        # Re-rendering with the raw-HTML trust recorded per post; share text
 │   ├── ShareText.php           # Social-post text sized for X's weighted character count
 │   ├── PublishSlots.php        # Daily publishing slots, next free slot, the weekly schedule grid
@@ -642,6 +650,7 @@ hayabusapress/
 │   │   ├── schedule.tpl.php        # Days × publishing slots
 │   │   ├── templates.tpl.php       # Post templates
 │   │   ├── speakers.tpl.php        # Speech-bubble speakers
+│   │   ├── series.tpl.php          # Series: settings, order and chapters
 │   │   ├── categories.tpl.php
 │   │   ├── tags.tpl.php
 │   │   ├── plugins.tpl.php
@@ -659,6 +668,8 @@ hayabusapress/
 │       ├── tag.tpl.php
 │       ├── archive.tpl.php
 │       ├── search.tpl.php
+│       ├── series.tpl.php          # A series' table of contents (optional; other themes fall back to this one)
+│       ├── series_nav.tpl.php      # Series title / previous · contents · next, included by post.tpl.php
 │       ├── 404.tpl.php
 │       └── assets/
 │           ├── style.css           # {# inline_css 'style.css' #} → baked into FPC
@@ -750,11 +761,12 @@ The full schema files (`schema.mysql.sql` / `schema.pgsql.sql`) always describe 
 INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
   VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>),
          ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>),
-         ('V001004000', 'seo_feeds_templates',               'BASELINE', <now>);
+         ('V001004000', 'seo_feeds_templates',               'BASELINE', <now>),
+         ('V001005000', 'series',                            'BASELINE', <now>);
 ```
 
 - `checksum = 'BASELINE'` is a sentinel meaning "this row came from a full schema, not a diff migration" — checksum verification skips `BASELINE` rows.
-- Because `db:install` applies the full schema **including this INSERT**, a fresh database immediately reports itself as the current version (`V001004000`) = fully up to date. `db:migrate` then correctly finds **nothing pending** (it will never try to re-add existing columns).
+- Because `db:install` applies the full schema **including this INSERT**, a fresh database immediately reports itself as the current version (`V001005000`) = fully up to date. `db:migrate` then correctly finds **nothing pending** (it will never try to re-add existing columns).
 
 #### The three guarantees
 
@@ -775,6 +787,7 @@ The full schema files always describe the latest version and record every diff a
 |---|---|---|
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`; `posts.layout` / `show_toc` / `is_sponsored`; new tables `blocks` and `links` |
 | 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`; `categories.hashtags` / `feed_enabled`; new tables `post_templates`, `slug_redirects` and `speakers`. Then run `posts:recompile --reassess` once |
+| 1.5.0 | `V001005000__series` | New table `series`; `posts.series_id` / `series_order` / `series_part` (`idx_posts_series`) / `char_count` / `reading_minutes`. Then run `posts:recompile` once |
 
 > This stays within HBP's constitution: pure PHP + PDO, raw SQL, zero external tooling (no Flyway/Liquibase).
 
@@ -800,6 +813,7 @@ The full schema files always describe the latest version and record every diff a
 | 16 | `post_templates` | Starting points for new posts (copied into the post, never linked) |
 | 17 | `slug_redirects` | Old slugs of published posts → `post_id`, served as 301 |
 | 18 | `speakers` | Speakers of `:::say` speech bubbles (`slug` unique, name, avatar, side) |
+| 19 | `series` | Series (`lang` + `slug` unique, description, status, cover, `feed_enabled`, `post_count` / `char_count` counters) |
 
 ### Key `posts` columns
 
@@ -821,6 +835,8 @@ The full schema files always describe the latest version and record every diff a
 | `meta_description_auto` | Excerpt of the body baked at save time; used when `meta_description` is empty |
 | `share_text` / `share_text_auto` | Social-post text typed by the editor / generated at save time (JSON Feed `_hbp.share_text`) |
 | `raw_html_allowed` / `content_saved_by` | Whether the last body save was by a holder of `post:raw_html`, and who (`0` = Super User). Recompiles use this, not anyone's current role |
+| `series_id` / `series_order` / `series_part` | Series membership, position (spaced by 10) and chapter heading. Deleting the series sets `series_id` to `NULL` |
+| `char_count` / `reading_minutes` | Characters of the rendered body and the reading time, computed at save time |
 | `user_id` | `NULL` = Super User. `ON DELETE RESTRICT` — reassignment required before staff deletion |
 
 > Index `idx_posts_schedule (status, published_at)` drives the `WHERE status='scheduled' AND published_at <= NOW()` lookup; all list indexes sort by `published_at DESC`.
@@ -934,6 +950,8 @@ Themes must print the slots and the widget areas themselves:
 <?php echo PluginManager::snippet('body_end'); ?>    <!-- just before </body> -->
 {{{ SidebarCompiler::areaFor('content_before', $lang ?? '', $layout ?? null) }}}
 ```
+
+The same goes for series. A theme without `series.tpl.php` gets the bundled theme's table of contents (inside its own header and footer, under its own CSS — style the `hbp-series-*` classes), but the previous / next links on a post appear only where the theme's `post.tpl.php` prints them: `{% include 'series_nav' %}`, or its own markup from `$post['series']` (`title`, `url`, `status`, `part`, `prev` / `next` = `{title, url}` or null).
 
 ### The 3 Rules
 

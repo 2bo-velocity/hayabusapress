@@ -86,9 +86,11 @@ class Scheduler
         if (!class_exists('Counters')) {
             require_once CORE_PATH . '/Counters.php';
         }
+        require_once CORE_PATH . '/Series.php';
 
         foreach ($due as $post) {
             $counterBefore = Counters::snapshot((int)$post['id']);
+            $seriesBefore  = Series::snapshot((int)$post['id']);
 
             // Promote status to published (keep published_at at the scheduled time)
             DB::execute(
@@ -110,6 +112,8 @@ class Scheduler
 
             // The post just became publicly visible, so the category/tag counts move with it
             Counters::applyPostChange($counterBefore, Counters::snapshot((int)$post['id']));
+            // A post that goes live in a series gives its neighbours a new previous / next link
+            Series::applyPostChange($seriesBefore, Series::snapshot((int)$post['id']));
 
             // Merge into the existing publish flow (precise FPC purge + sitemap + feed regeneration)
             self::fireCacheInvalidation($post);

@@ -55,4 +55,18 @@ return [
     'back_home'              => '← ホームへ戻る',
 
     'scheduled'              => '予約',
+
+    // 連載（1.5.0）。%d は数値、series_chars は桁区切り済みの数値（%s）。
+    'series_label'            => '連載',
+    'series_status_ongoing'   => '連載中',
+    'series_status_completed' => '完結',
+    'series_status_hiatus'    => '休載中',
+    'series_count'            => '全%d回',
+    'series_chars'            => '%s文字',
+    'series_start'            => '最初から読む',
+    'series_index'            => '目次',
+    'series_prev'             => '← 前へ',
+    'series_next'             => '次へ →',
+    'series_nav_aria'         => '連載のナビゲーション',
+    'reading_minutes'         => '約%d分',
 ];

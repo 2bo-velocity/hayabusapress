@@ -373,6 +373,12 @@ match (true) {
     $subPath === '/links' => handleAdminLinks($commonData),
     $subPath === '/links/save' && isPost() => handleAdminLinksSave($adminPath),
 
+    // --- Series ---
+    $subPath === '/series' => handleAdminSeries($commonData),
+    $subPath === '/series/save' && isPost() => handleAdminSeriesSave($adminPath),
+    $subPath === '/series/delete' && isPost() => handleAdminSeriesDelete($adminPath),
+    $subPath === '/series/reorder' && isPost() => handleAdminSeriesReorder($adminPath),
+
     // --- Category/tag management ---
     $subPath === '/categories' => handleAdminCategories($commonData),
     $subPath === '/category/save' && isPost() => handleAdminCategorySave($adminPath),
@@ -541,6 +547,7 @@ function handleAdminPosts(array $common): void
         'status'      => in_array($_GET['status'] ?? '', ['published', 'draft', 'scheduled'], true) ? $_GET['status'] : '',
         'category_id' => (int)($_GET['category_id'] ?? 0),
         'tag_id'      => (int)($_GET['tag_id'] ?? 0),
+        'series_id'   => (int)($_GET['series_id'] ?? 0),
         'pub_from'    => trim((string)($_GET['pub_from'] ?? '')),
         'pub_to'      => trim((string)($_GET['pub_to'] ?? '')),
         'cre_from'    => trim((string)($_GET['cre_from'] ?? '')),
@@ -553,6 +560,7 @@ function handleAdminPosts(array $common): void
     // Choices for the filter dropdowns
     $allCategories = DB::fetchAll('SELECT id, type, lang, name FROM categories ORDER BY lang, type, name');
     $allTags       = DB::fetchAll('SELECT id, type, lang, name FROM tags ORDER BY lang, type, name');
+    $allSeries     = DB::fetchAll('SELECT id, lang, title FROM series ORDER BY lang, title');
 
     // Build the query string excluding page for pagination links
     $qsParams = $filters;
@@ -583,6 +591,7 @@ function handleAdminPosts(array $common): void
         'filters'       => $filters,
         'allCategories' => $allCategories,
         'allTags'       => $allTags,
+        'allSeries'     => $allSeries,
         'catNames'      => $catNames,
         'authorNames'   => $authorNames,
         'baseQuery'     => $baseQuery,
@@ -809,6 +818,10 @@ function handleAdminPostSave(array $common, string $adminPath): void
         $missing = MarkdownCompiler::missingCards();
         if ($missing) {
             $hint .= '&card_missing=' . rawurlencode(implode(',', $missing));
+        }
+        // The chosen series was of another language, so the post was saved outside any series
+        if (AdminPostController::seriesDropped()) {
+            $hint .= '&series_lang=1';
         }
         header('Location: /' . $adminPath . '/post/edit/' . $id . '?saved=1' . $hint);
     } catch (Exception $e) {
@@ -1279,6 +1292,195 @@ function handleAdminLinksSave(string $adminPath): void
     LinkCompiler::compile();
     header('Location: ' . $back . '?saved=1');
     exit;
+}
+
+/**
+ * Series: list, create/edit form, and the ordering of the posts of the series being edited.
+ * Same permission as categories (taxonomy:manage): a series is a way of grouping posts.
+ */
+function handleAdminSeries(array $common): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Series.php';   // Series::path() in the view
+    // member_count: every post of the series, drafts included, for the delete confirmation
+    $series     = DB::fetchAll(
+        'SELECT s.*, (SELECT COUNT(*) FROM posts p WHERE p.series_id = s.id) AS member_count
+           FROM series s ORDER BY s.lang, s.title'
+    );
+    $editId     = (int)($_GET['edit'] ?? 0);
+    $editSeries = null;
+    foreach ($series as $s) {
+        if ((int)$s['id'] === $editId) {
+            $editSeries = $s;
+        }
+    }
+    // Every post of the series, drafts and scheduled ones included, in series order
+    $episodes = $editSeries ? DB::fetchAll(
+        'SELECT id, title, status, series_part, published_at, char_count FROM posts
+          WHERE series_id = ? AND deleted_at IS NULL ORDER BY series_order, id',
+        [$editId]
+    ) : [];
+    $contentLocales = HbpLocale::getAvailableContentLocales();
+    View::render('admin/series', array_merge($common, compact('series', 'editSeries', 'episodes', 'contentLocales')));
+}
+
+function handleAdminSeriesSave(string $adminPath): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Series.php';
+    require_once CORE_PATH . '/SeriesCompiler.php';
+    $id     = (int)($_POST['id'] ?? 0);
+    $title  = mb_substr(trim((string)($_POST['title'] ?? '')), 0, 255);
+    $lang   = trim((string)($_POST['lang'] ?? ''));
+    if (!isset(hbpContentLocales()[$lang])) {
+        $lang = Env::get('SITE_DEFAULT_LANG', 'en');
+    }
+    // An ASCII slug, typed or derived from the title; a title with no ASCII left needs one typed
+    $slug = strtolower(trim((string)($_POST['slug'] ?? '')));
+    if ($slug === '') {
+        $slug = trim((string)preg_replace('/[^a-z0-9]+/', '-', strtolower($title)), '-');
+    }
+    $status = in_array($_POST['status'] ?? '', Series::STATUSES, true) ? $_POST['status'] : 'ongoing';
+    $desc   = trim(str_replace(["\r\n", "\r"], "\n", (string)($_POST['description'] ?? '')));
+    $feedOn = !empty($_POST['feed_enabled']) ? 1 : 0;
+    $back   = '/' . $adminPath . '/series' . ($id > 0 ? '?edit=' . $id . '&' : '?');
+
+    $before = $id > 0 ? DB::fetchOne('SELECT * FROM series WHERE id = ? LIMIT 1', [$id]) : null;
+    if ($title === '' || !preg_match(Series::SLUG_PATTERN, $slug) || ($id > 0 && !$before)) {
+        header('Location: ' . $back . 'error=1');
+        exit;
+    }
+    // Every post of a series has the series' language: a series that has posts keeps its language
+    if ($before && $before['lang'] !== $lang
+        && DB::fetchOne('SELECT 1 AS x FROM posts WHERE series_id = ? LIMIT 1', [$id])) {
+        header('Location: ' . $back . 'lang_locked=1');
+        exit;
+    }
+
+    // Description: Markdown rendered once here, without raw HTML (like a post saved without post:raw_html)
+    $descHtml = $desc !== '' ? MarkdownCompiler::render($desc, false, ['lang' => $lang]) : null;
+
+    // Cover: a new upload replaces the old file, the checkbox removes it
+    $cover = $before['cover_image'] ?? null;
+    try {
+        if (isset($_FILES['cover']) && ($_FILES['cover']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+            $newCover = Media::avatarUrl(AdminUserController::processAvatarUpload($_FILES['cover']));
+            hbpDeleteSeriesCover($cover);
+            $cover = $newCover;
+        } elseif (!empty($_POST['cover_remove'])) {
+            hbpDeleteSeriesCover($cover);
+            $cover = null;
+        }
+    } catch (Throwable $e) {
+        header('Location: ' . $back . 'cover_error=1');
+        exit;
+    }
+
+    try {
+        if ($id > 0) {
+            DB::execute(
+                'UPDATE series SET lang=?, slug=?, title=?, description=?, description_html=?, status=?, cover_image=?, feed_enabled=?, updated_at=? WHERE id=?',
+                [$lang, $slug, $title, $desc !== '' ? $desc : null, $descHtml, $status, $cover, $feedOn, gmdate('Y-m-d H:i:s'), $id]
+            );
+        } else {
+            DB::execute(
+                'INSERT INTO series (lang, slug, title, description, description_html, status, cover_image, feed_enabled) VALUES (?,?,?,?,?,?,?,?)',
+                [$lang, $slug, $title, $desc !== '' ? $desc : null, $descHtml, $status, $cover, $feedOn]
+            );
+            $id = (int)DB::lastInsertId();
+        }
+    } catch (Throwable) {
+        header('Location: ' . $back . 'error=1');   // duplicate (lang, slug)
+        exit;
+    }
+
+    SeriesCompiler::compile();
+    if ($before) {
+        // Each post shows the series' title and status; the old table of contents may be at another slug
+        Series::purgeAll($id, (string)$before['lang'], (string)$before['slug']);
+        Series::purgeToc($id);
+    }
+    hbpSeriesSideEffects([$lang, (string)($before['lang'] ?? $lang)]);
+    header('Location: /' . $adminPath . '/series?edit=' . $id . '&saved=1');
+    exit;
+}
+
+function handleAdminSeriesDelete(string $adminPath): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Series.php';
+    require_once CORE_PATH . '/SeriesCompiler.php';
+    $id     = (int)($_POST['id'] ?? 0);
+    $series = $id > 0 ? DB::fetchOne('SELECT * FROM series WHERE id = ? LIMIT 1', [$id]) : null;
+    if ($series) {
+        // Purge while the posts still point at the series, then let them go
+        Series::purgeAll($id, (string)$series['lang'], (string)$series['slug']);
+        $pdo = DB::getInstance();
+        $pdo->beginTransaction();
+        try {
+            DB::execute('UPDATE posts SET series_id = NULL, series_order = 0, series_part = NULL WHERE series_id = ?', [$id]);
+            DB::execute('DELETE FROM series WHERE id = ?', [$id]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+        hbpDeleteSeriesCover($series['cover_image'] ?? null);
+        SeriesCompiler::compile();
+        hbpSeriesSideEffects([(string)$series['lang']]);
+    }
+    header('Location: /' . $adminPath . '/series');
+    exit;
+}
+
+function handleAdminSeriesReorder(string $adminPath): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Series.php';
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id > 0 && DB::fetchOne('SELECT 1 AS x FROM series WHERE id = ? LIMIT 1', [$id])) {
+        $parts = [];
+        foreach ((array)($_POST['part'] ?? []) as $postId => $part) {
+            $parts[(int)$postId] = (string)$part;
+        }
+        Series::reorder($id, array_map('intval', (array)($_POST['ids'] ?? [])), $parts);
+        // Neighbours and chapter headings can change anywhere in the series
+        Series::purgeAll($id);
+    }
+    header('Location: /' . $adminPath . '/series?edit=' . $id . '&saved=1');
+    exit;
+}
+
+/** Remove a series cover file that was uploaded through the series screen (an avatars-tree path). */
+function hbpDeleteSeriesCover(?string $cover): void
+{
+    $prefix = '/assets/site/avatars/';
+    if ($cover !== null && str_starts_with($cover, $prefix)) {
+        $file = Media::avatarPath(basename($cover));
+        if (is_file($file)) {
+            @unlink($file);
+        }
+    }
+}
+
+/**
+ * What a series change reaches outside its own pages: the sitemap, the series feeds and the
+ * "Series" widget (every cached page embeds the widget areas, so a changed area purges them all —
+ * the same rule as a post save).
+ */
+function hbpSeriesSideEffects(array $langs): void
+{
+    SiteFileCompiler::compileSitemap();
+    require_once CORE_PATH . '/FeedCompiler.php';
+    require_once CORE_PATH . '/CacheManager.php';
+    $areasChanged = false;
+    foreach (array_unique(array_filter($langs)) as $lang) {
+        FeedCompiler::compile($lang);
+        $areasChanged = SidebarCompiler::compileAllLayouts($lang) || $areasChanged;
+    }
+    if ($areasChanged) {
+        CacheManager::purgeAll();
+    }
 }
 
 function handleAdminCategories(array $common): void

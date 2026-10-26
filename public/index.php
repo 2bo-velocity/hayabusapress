@@ -176,7 +176,6 @@ if (isset($cfg['plugins'][$path])) {
 }
 
 // (5) Detail/listing pattern matching
-$cap     = Env::int('LIST_FPC_DEPTH', 10);
 $pageSize = Env::int('LIST_PAGE_SIZE', 10);
 $key     = null;
 $resolve = null;
@@ -197,6 +196,10 @@ if ($path === '/' || preg_match('#^/page/(\d{1,4})$#', $path, $m)) {
     $p       = (int)($m[2] ?? 1);
     $key     = $lang . '_list_archive_' . $m[1] . ($p > 1 ? "_p{$p}" : '');
     $resolve = ['kind' => 'archive', 'ym' => $m[1], 'lang' => $lang, 'page' => $p];
+} elseif (preg_match('#^/post/series/([a-z0-9][a-z0-9-]{0,199})(?:/page/(\d{1,4}))?$#', $path, $m)) {
+    $p       = (int)($m[2] ?? 1);
+    $key     = $lang . '_list_series_' . $m[1] . ($p > 1 ? "_p{$p}" : '');
+    $resolve = ['kind' => 'series', 'slug' => $m[1], 'lang' => $lang, 'page' => $p];
 } elseif (preg_match('#^/search$#', $path)) {
     // the search page is static (client-side search). Baked into FPC and served.
     $key     = $lang . '_search';
@@ -206,9 +209,9 @@ if ($path === '/' || preg_match('#^/page/(\d{1,4})$#', $path, $m)) {
     handleFeedFile($lang, explode('.', $m[1])[0], $cfg['default']);
     exit;
 } elseif ($path === $uri
-    && preg_match('#^/feeds/([a-z]{2,5})/category/([a-z0-9][a-z0-9-]{0,199})\.(atom\.xml|rss\.xml|json)$#', $path, $m)) {
-    // per-category feeds (FeedCompiler::CATEGORY_DIR); the language is in the path itself
-    handleCategoryFeedFile($m[1], $m[2], explode('.', $m[3])[0]);
+    && preg_match('#^/feeds/([a-z]{2,5})/(category|series)/([a-z0-9][a-z0-9-]{0,199})\.(atom\.xml|rss\.xml|json)$#', $path, $m)) {
+    // per-category and per-series feeds (FeedCompiler::CATEGORY_DIR); the language is in the path itself
+    handleListFeedFile($m[2], $m[1], $m[3], explode('.', $m[4])[0]);
     exit;
 } elseif ($path === '/feed') {
     // Legacy URL backward compat: 301 redirect to /feed.atom.xml
@@ -228,14 +231,18 @@ if ($path === '/' || preg_match('#^/page/(\d{1,4})$#', $path, $m)) {
 }
 
 // (6) Out-of-range numbered pages return 404 immediately
-if (isset($resolve['page']) && ($resolve['page'] < 1 || $resolve['page'] > $cap)) {
+if (isset($resolve['page']) && ($resolve['page'] < 1 || $resolve['page'] > listCap($resolve))) {
     http_response_code(404);
     render404(['lang' => $lang, 'siteName' => Env::get('SITE_NAME', 'HBP')]);
     exit;
 }
 
 // (7) Immediate FPC hit (zero references to the map or the DB)
-if ($key !== null && empty($_GET)) {
+// A query string does not change a cached page (themes do not read $_GET; only search does, and its
+// result pages are never cached), so it does not bypass the cache either. Otherwise ?anything on
+// every request would force a full render with DB queries — a cheap way to load the database — and
+// tracking parameters (utm_*) would miss the cache for real readers too.
+if ($key !== null && (($resolve['kind'] ?? '') !== 'search' || empty($_GET))) {
     $cacheFile = CacheManager::pagePath($key);
     if (is_file($cacheFile)) {
         SecurityHeaderCompiler::emit('frontend');
@@ -263,6 +270,7 @@ match ($resolve['kind']) {
     'category' => handleCategory($resolve, $commonData, $key, $pageSize),
     'tag'      => handleTag($resolve, $commonData, $key, $pageSize),
     'archive'  => handleArchive($resolve, $commonData, $key, $pageSize),
+    'series'   => handleSeries($resolve, $commonData, $key),
     'search'   => handleSearch($resolve, $commonData, $key, $pageSize),
     'post'     => handleDetail($resolve, $commonData, $key),
     'page'     => handleDetail($resolve, $commonData, $key),
@@ -338,6 +346,10 @@ function handleDetail(array $resolve, array $common, ?string $fpcKey): void
     }
     $post['related_posts'] = $related;
 
+    // Series: previous / next and the link to its table of contents (two one-row index ranges)
+    require_once CORE_PATH . '/Series.php';
+    $post['series'] = Series::forPost($post, (string)($common['defaultLang'] ?? ''));
+
     // hreflang_cache
     $post['hreflang'] = !empty($post['hreflang_cache'])
         ? (json_decode($post['hreflang_cache'], true) ?? null)
@@ -389,6 +401,58 @@ function handleCategory(array $resolve, array $common, ?string $fpcKey, int $pag
     $sidebarRight = SidebarCompiler::loadSidebar('sidebar_right', $lang);
 
     renderWithFpc($fpcKey, 'category', array_merge($common, $listing, compact('cat', 'posts', 'sidebarRight')));
+}
+
+/**
+ * A series' table of contents: its published posts in series order, SERIES_PAGE_SIZE per page.
+ * Ordered by position only — a "newest first" switch would be a query string, which the page cache
+ * does not key on.
+ */
+function handleSeries(array $resolve, array $common, ?string $fpcKey): void
+{
+    $lang = $resolve['lang'];
+    $page = $resolve['page'];
+
+    $series = DB::fetchOne('SELECT * FROM series WHERE lang = ? AND slug = ? LIMIT 1', [$lang, $resolve['slug']]);
+    if (!$series) {
+        handle404($common);
+        return;
+    }
+
+    $size   = max(1, Env::int('SERIES_PAGE_SIZE', 100));
+    $offset = ($page - 1) * $size;
+    $posts  = DB::fetchAll(
+        "SELECT id, title, slug, published_at, char_count, reading_minutes, series_part, featured_image
+           FROM posts WHERE series_id = ? AND status = 'published'
+          ORDER BY series_order, id LIMIT ? OFFSET ?",
+        [(int)$series['id'], $size + 1, $offset]
+    );
+    $listing = listingViewData($resolve, $common, count($posts) > $size);
+    $posts   = array_slice($posts, 0, $size);
+    if (empty($posts)) {
+        // A series with nothing published yet has no public page
+        handle404($common);
+        return;
+    }
+
+    // Chapter headings: printed where series_part changes, and above the first row of every page
+    $prevPart = null;
+    foreach ($posts as $i => &$p) {
+        $part = ($p['series_part'] ?? '') !== '' ? (string)$p['series_part'] : null;
+        $p['part_heading'] = $part !== null && ($i === 0 || $part !== $prevPart) ? $part : null;
+        $prevPart = $part;
+    }
+    unset($p);
+
+    $series['status'] = in_array($series['status'], ['ongoing', 'completed', 'hiatus'], true) ? $series['status'] : 'ongoing';
+    // No cover of its own: the first post's featured image stands in for og:image
+    if ((string)($series['cover_image'] ?? '') === '' && $page === 1) {
+        $series['cover_image'] = $posts[0]['featured_image'] ?? null;
+    }
+    // First post of this page: the reader's "start here" on page 1
+    $firstUrl = (($lang === ($common['defaultLang'] ?? '')) ? '' : "/{$lang}") . '/post/' . $posts[0]['slug'];
+
+    renderWithFpc($fpcKey, 'series', array_merge($common, $listing, compact('series', 'posts', 'firstUrl')));
 }
 
 function handleTag(array $resolve, array $common, ?string $fpcKey, int $pageSize): void
@@ -570,21 +634,21 @@ function handleFeedFile(string $lang, string $format, string $defaultLang): void
 }
 
 /** A category feed (only categories with feed_enabled have one). */
-function handleCategoryFeedFile(string $lang, string $slug, string $format): void
+/** @param string $kind 'category' or 'series' */
+function handleListFeedFile(string $kind, string $lang, string $slug, string $format): void
 {
     require_once CORE_PATH . '/FeedCompiler.php';
     if (!Env::bool('FEED_ENABLED', true) || !in_array($format, FeedCompiler::formats(), true)) {
         http_response_code(404);
         exit;
     }
-    $filePath = FeedCompiler::categoryFile($lang, $slug, $format);
+    $filePath = FeedCompiler::listFile($kind, $lang, $slug, $format);
     if (!is_file($filePath)) {
-        // Auto-Healing only for a real, enabled category: an unknown slug must not trigger a rebuild
-        $cat = DB::fetchOne(
-            "SELECT id FROM categories WHERE type = 'post' AND lang = ? AND slug = ? AND feed_enabled = TRUE LIMIT 1",
-            [$lang, $slug]
-        );
-        if ($cat) {
+        // Auto-Healing only for a real, enabled category or series: an unknown slug must not trigger a rebuild
+        $owner = $kind === 'series'
+            ? DB::fetchOne('SELECT id FROM series WHERE lang = ? AND slug = ? AND feed_enabled = TRUE LIMIT 1', [$lang, $slug])
+            : DB::fetchOne("SELECT id FROM categories WHERE type = 'post' AND lang = ? AND slug = ? AND feed_enabled = TRUE LIMIT 1", [$lang, $slug]);
+        if ($owner) {
             FeedCompiler::compile($lang);
         }
     }
@@ -709,9 +773,14 @@ function render404(array $data): void
 /**
  * How many listing pages are reachable. Pages past this 404 (see step (6) above), so the "next"
  * link has to stop here too — otherwise the last page of a long listing links straight into a 404.
+ * A series' table of contents has its own depth (Series::tocDepth()), so it can list a whole series.
  */
-function listCap(): int
+function listCap(array $resolve = []): int
 {
+    if (($resolve['kind'] ?? '') === 'series') {
+        require_once CORE_PATH . '/Series.php';
+        return Series::tocDepth();
+    }
     return max(1, Env::int('LIST_FPC_DEPTH', 10));
 }
 
@@ -732,6 +801,7 @@ function routeBasePath(array $resolve, string $defaultLang): ?string
         'category' => $prefix . '/post/category/' . ($resolve['slug'] ?? ''),
         'tag'      => $prefix . '/post/tag/'      . ($resolve['slug'] ?? ''),
         'archive'  => $prefix . '/post/archive/'  . ($resolve['ym']   ?? ''),
+        'series'   => $prefix . '/post/series/'   . ($resolve['slug'] ?? ''),
         'post'     => $prefix . '/post/'          . ($resolve['slug'] ?? ''),
         'page'     => $prefix . '/page/'          . ($resolve['slug'] ?? ''),
         default    => null,
@@ -766,7 +836,7 @@ function listingViewData(array $resolve, array $common, bool $rawHasNext): array
 {
     $page        = (int)($resolve['page'] ?? 1);
     $defaultLang = (string)($common['defaultLang'] ?? '');
-    $hasNext     = $rawHasNext && $page < listCap();
+    $hasNext     = $rawHasNext && $page < listCap($resolve);
 
     return [
         'page'     => $page,

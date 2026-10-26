@@ -114,14 +114,16 @@ class CacheManager
      * purge the per-page FPC of listing pages (page 1 + page N).
      * Used because publish/unpublish/delete/category-change of a post shifts the page distribution.
      *
-     * @param string $prefix cache file prefix (e.g. 'ja_home', 'ja_list_category_tech')
+     * @param string   $prefix cache file prefix (e.g. 'ja_home', 'ja_list_category_tech')
+     * @param int|null $depth  pages that can exist; null = LIST_FPC_DEPTH (a series' table of
+     *                         contents passes its own, see Series::tocDepth())
      */
-    public static function purgeListPages(string $prefix): void
+    public static function purgeListPages(string $prefix, ?int $depth = null): void
     {
         // Page 1 (no suffix)
         self::unlinkIfExists("{$prefix}.html");
         // Page 2 onward
-        $cap = class_exists('Env') ? Env::int('LIST_FPC_DEPTH', 10) : (int)(($_ENV['LIST_FPC_DEPTH'] ?? 10) ?: 10);
+        $cap = $depth ?? (class_exists('Env') ? Env::int('LIST_FPC_DEPTH', 10) : (int)(($_ENV['LIST_FPC_DEPTH'] ?? 10) ?: 10));
         for ($p = 2; $p <= $cap; $p++) {
             self::unlinkIfExists("{$prefix}_p{$p}.html");
         }
@@ -160,6 +162,15 @@ class CacheManager
     }
 
     /** @param string $file FPC filename in '{key}.html' form (the historic call convention) */
+    /**
+     * Purge one cached page by its FPC key (e.g. 'ja_post_hello'). For pages whose dependency is not
+     * covered by purgePost(), such as the neighbours of a post in a series (see Series).
+     */
+    public static function purgePage(string $key): void
+    {
+        self::unlinkIfExists($key . '.html');
+    }
+
     private static function unlinkIfExists(string $file): void
     {
         $path = self::pagePath((string)preg_replace('/\.html$/', '', $file));

@@ -149,7 +149,7 @@ Usage:
 
   # Scale maintenance
   php core/cli.php sitemap:rebuild [--if-pending] Rebuild sitemap.xml (--if-pending: only when a throttled save left it stale)
-  php core/cli.php counters:rebuild              Recompute categories.post_count / tags.post_count
+  php core/cli.php counters:rebuild              Recompute the post counts of categories / tags / series
   php core/cli.php tags:reindex                  Rebuild post_tags' denormalized listing keys
 
   # Reusable blocks / managed links
@@ -235,6 +235,10 @@ function cmd_init(): void
     require_once CORE_PATH . '/SpeakerCompiler.php';
     SpeakerCompiler::compile();
     echo "  SpeakerCompiler        [OK]\n";
+
+    require_once CORE_PATH . '/SeriesCompiler.php';
+    SeriesCompiler::compile();
+    echo "  SeriesCompiler         [OK]\n";
 
     SeoCompiler::compile();
     echo "  SeoCompiler            [OK]\n";
@@ -878,7 +882,7 @@ function cmd_sitemap_rebuild(string $arg): void
 }
 
 /**
- * Recompute categories.post_count / tags.post_count from the source of truth.
+ * Recompute categories.post_count / tags.post_count / series.post_count + char_count from the source of truth.
  * The counters are moved by deltas during normal operation, so run this if they ever look wrong
  * (after a manual SQL edit, an interrupted request, or a restore from backup).
  */
@@ -886,15 +890,17 @@ function cmd_counters_rebuild(): void
 {
     require_once CORE_PATH . '/Counters.php';
 
-    echo "Recomputing category / tag post counts...\n";
+    echo "Recomputing category / tag / series counts...\n";
     Counters::rebuildAll();
 
     require_once CORE_PATH . '/CategoryCompiler.php';
     require_once CORE_PATH . '/TagCompiler.php';
+    require_once CORE_PATH . '/SeriesCompiler.php';
     CategoryCompiler::compile();
     TagCompiler::compile();
+    SeriesCompiler::compile();
 
-    echo "counters:rebuild complete (categories.cache.php / tags.cache.php regenerated).\n";
+    echo "counters:rebuild complete (categories / tags / series caches regenerated).\n";
 }
 
 /**

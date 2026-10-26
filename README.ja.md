@@ -43,7 +43,7 @@ WordPress の「重さ・セキュリティの緩さ・積み上がった技術�
 | **分割ペインMarkdownエディタ** | タイトル/本文を分離入力。本文はプレーンテキスト（その場リッチ変換なし）＋サーバー側 `MarkdownCompiler` を共有する横並びライブプレビュー。画像のドラッグ&ドロップ、オートセーブ、ルビ/傍点ツールバー。 |
 | **添付画像の一覧・削除** | 本文入力欄の直下に、編集中コンテンツの添付画像（`attachments`）をサムネ一覧。各画像をカーソル位置へ本文挿入、または**物理削除**（確認必須・本文で使用中なら警告を強化）。本文の `![]()` 自動書き換えは行わない（リンク切れ除去はユーザー手動）。削除APIは `media:manage` ＋ CSRF、`post:edit_other` 無しなら自分のコンテンツのみ。 |
 | **文字数カウント** | タイトル・本文入力欄の左上に文字数をリアルタイム表示。**コードポイント単位**（`[...str].length`＝和文も半角も1文字）。タイトルは 255 ハード上限警告（230超で注意）、本文は推奨レンジのソフトガイド（薄い／標準／網羅）。クライアント側のみ＝サーバー・FPC への影響ゼロ。 |
-| **ウィジェットと配置エリア** | 11種類のウィジェット（検索・最近のコメント・アーカイブ・カテゴリ・タグ・最新記事・記事の手動ピックアップ・Markdown テキスト・画像バナー・生 HTML・メニュー）を、6つのエリア（右/左サイドバー・ヘッダー下・本文の前/後・フッター）に置けます。ウィジェットごとに見出しを付けられます。保存時にエリア別・言語別の HTML へコンパイルし、空のエリアは何も出力しません。 |
+| **ウィジェットと配置エリア** | 12種類のウィジェット（検索・最近のコメント・アーカイブ・カテゴリ・タグ・最新記事・記事の手動ピックアップ・Markdown テキスト・画像バナー・生 HTML・メニュー・連載一覧）を、6つのエリア（右/左サイドバー・ヘッダー下・本文の前/後・フッター）に置けます。ウィジェットごとに見出しを付けられます。保存時にエリア別・言語別の HTML へコンパイルし、空のエリアは何も出力しません。 |
 | **記事ごとのレイアウト** | テーマが `theme.json` でレイアウト（どのエリアを出すか ＋ `<body>` のクラス）を宣言し、編集画面で選べます。同梱テーマは「標準」「1カラム」「シンプル」の3つです。 |
 | **目次** | 記事ごとにオン/オフ。保存時に H2/H3 から作り、最初の H2 の直前に入れます（H2 が2つ以上あるときだけ）。見出しの id は重複しないよう採番します。 |
 | **再利用ブロック** | **管理画面 → ブロック**で一度書いたものを、記事に `{{ block:slug }}` と1行書くだけで差し込めます。記事には目印だけを残し、ページキャッシュを書くときに展開するので、ブロックを直すと使っている全記事へ即座に反映されます（記事の再保存は不要）。 |
@@ -52,8 +52,10 @@ WordPress の「重さ・セキュリティの緩さ・積み上がった技術�
 | **広告・PR 表記** | 記事ごとの「広告・プロモーションを含む」設定で、本文の冒頭に表記を入れ（文言は `SPONSORED_NOTICE_TEXT` で変更可）、外部リンクに `rel="sponsored"` を付けます。`/go/` へのリンクには常に `rel="sponsored nofollow"` が付きます。 |
 | **公開枠と予約画面** | SEO 設定に毎日の公開時刻（例：`07:00, 12:00, 21:00`）を登録すると、編集画面に枠のボタンと「次の空き枠」が出ます。**管理画面 → 予約**は予約・公開済みの記事を「日付 × 公開枠」のマス目に並べ、空き枠を強調します。管理画面だけで完結し、公開ページには何も足しません。 |
 | **タイトル・概要文・スラッグ** | ページタイトルの書式（`{title} \| {site}`）。概要文が空なら、保存時に本文から約120字の抜粋を作ります（`meta_description_auto`。目次と広告表記は除く）。スラッグが空なら、タイトル・日付と時刻（`20261024-0700`）・記事 ID（`p123`）から作ります。英数字の残らないタイトルは日付と時刻になります。 |
-| **構造化データ（JSON-LD）** | 記事に `BlogPosting` と `BreadcrumbList`、固定ページに `WebPage`、トップに `WebSite`。ページキャッシュを書くときに組み立てます。`application/ld+json` はデータブロックなので、CSP にハッシュは要りません。 |
-| **配信用フィード** | Atom/RSS に加えて JSON Feed 1.1（`/feed.json`）、さらに「フィードを出す」をオンにしたカテゴリ別のフィード（`/feeds/{lang}/category/{slug}.{atom.xml,rss.xml,json}`）。JSON の各記事は `_hbp.share_text` を持ちます。手入力の SNS 用文面か、保存時にタイトル・概要・カテゴリのハッシュタグから作った文面で、**X の重み付き文字数**（日本語 2・URL 23）でリンク分を残して収めます。 |
+| **連載** | 小説の連載や章立てのチュートリアルのように、順番のある普通の記事のまとまり。各記事の本文の上に連載名と章、下に「前へ・目次・次へ」が出て、連載ごとに目次ページ `/post/series/{slug}` ができます（章見出し・各話の文字数・連載中／完結／休載中・任意の表紙と専用フィード。既定で `SERIES_PAGE_SIZE` × `SERIES_FPC_DEPTH` ＝ 1万本まで載る）。記事は自分の URL も他の機能もそのまま持ちます。前後の記事はページキャッシュを書くときに引き（それぞれ索引の1行引き）、変更時は本人・前後（変更前と変更後）・目次だけを消します。**管理画面 → 連載**（順序と章）と、各記事の編集画面で扱います。 |
+| **文字数と読了時間** | 保存時に、描画後の本文から数えて記事に記録します（`char_count` / `reading_minutes`）。ルビの読み・コード・目次・広告表記は数えません。CJK の文字は1分あたりの文字数、それ以外は1分あたりの語数で時間を出して足し合わせるので、日英が混ざった記事でも妥当な値になります（`READING_SPEED_CJK` / `READING_SPEED_WORDS`）。同梱テーマは「約N分」を表示します（`SHOW_READING_TIME`）。 |
+| **構造化データ（JSON-LD）** | 記事に `BlogPosting` と `BreadcrumbList`（連載の記事は `isPartOf` を持ち、パンくずが連載を通る）、連載の目次に `CreativeWorkSeries`、固定ページに `WebPage`、トップに `WebSite`。ページキャッシュを書くときに組み立てます。`application/ld+json` はデータブロックなので、CSP にハッシュは要りません。 |
+| **配信用フィード** | Atom/RSS に加えて JSON Feed 1.1（`/feed.json`）、さらに「フィードを出す」をオンにしたカテゴリ別・連載別のフィード（`/feeds/{lang}/category/{slug}.*`・`/feeds/{lang}/series/{slug}.*`）。JSON の各記事は `_hbp.share_text` を持ちます。手入力の SNS 用文面か、保存時にタイトル・概要・カテゴリのハッシュタグから作った文面で、**X の重み付き文字数**（日本語 2・URL 23）でリンク分を残して収めます。 |
 | **スラッグ変更時の 301** | 公開済みの記事のスラッグを変えると旧スラッグを残し、`/post/{旧}` をコンパイル済みの配列から現在の URL へ 301 で返します（DB を引かず、キャッシュにも載せない）。連鎖は畳み、別の記事が同じスラッグを使えばそちらが優先です。 |
 | **記事テンプレート** | 新しい記事のひな形（タイトル・本文・カテゴリ・タグ・レイアウト・目次・広告表記。`{date}` は今日の日付）。使うと**写す**だけなので、あとでテンプレートを直しても既存の記事は変わりません。 |
 | **囲み・吹き出し・記事カード** | `:::quote 出典\|URL`・`:::box summary 見出し`・`:::say 話者` 〜 `:::` で、通常の Markdown を出典付き引用・囲み枠・吹き出し（話者は管理画面で登録）に包みます。`{{ card:slug }}` は別の公開記事へのカードを焼き込みます。外側はサニタイザの後に検証済みの引数から組み立て、中身は通常どおりサニタイズします。 |
@@ -163,6 +165,9 @@ php core/cli.php system:init && php core/cli.php plugins:rebuild
 
 **1.4.0**（`V001004000`）へ上げるときは、3 と 4 のあいだで `php core/cli.php posts:recompile --reassess` を
 1回実行します。各記事の本文で生 HTML を通すかどうかを（著者の現在のロールから）記録し、自動の概要文と SNS 用文面を作ります。
+
+**1.5.0**（`V001005000`）へ上げるときも、3 と 4 のあいだで `php core/cli.php posts:recompile` を1回実行します。
+既存の記事の文字数と読了時間を埋めます（連載は空の状態から始まるので、ほかに埋め直すものはありません）。
 
 > **手順4の中身はリリースごとに異なります。** スキーマ変更によっては、非正規化データを埋め直すまでサイトが正しく表示されません（よく使うのは `tags:reindex`＝`post_tags` の一覧キー、`counters:rebuild`＝`categories.post_count` / `tags.post_count`）。どれが必要かは各リリースのリリースノートに明記します。
 >
@@ -342,14 +347,14 @@ Nginx では `deploy/nginx.sample.conf` がフィードのファイルを直接�
 | `lang:rebuild [locale]` | 指定ロケール（または全ロケール）のMUIビューキャッシュを削除し再焼き付けを強制 |
 | `assets:rebuild` | テーマCSS/JS編集後、全FPC＋ビューキャッシュをパージし CSP ハッシュを再計算 |
 | `authors:rebuild` | `authors.cache.php` を再生成し、影響を受ける記事FPCをパージ |
-| `posts:recompile [--reassess [--user=ID]]` | 全記事で Markdown → HTML ＋ サニタイザを、各記事に記録された生 HTML の許可で再実行（サニタイザ規則・`SPONSORED_NOTICE_TEXT`・話者・カードの参照先を変えた後に使用）。自動の概要文と SNS 用文面も作り直す。`--reassess` は先に、各本文を最後に保存した人の現在のロールから許可を付け直す（`--user=ID` で保存者を1人に絞る。`0` は Super User） |
+| `posts:recompile [--reassess [--user=ID]]` | 全記事で Markdown → HTML ＋ サニタイザを、各記事に記録された生 HTML の許可で再実行（サニタイザ規則・`SPONSORED_NOTICE_TEXT`・話者・カードの参照先を変えた後に使用）。自動の概要文と SNS 用文面、文字数と読了時間も作り直す。`--reassess` は先に、各本文を最後に保存した人の現在のロールから許可を付け直す（`--user=ID` で保存者を1人に絞る。`0` は Super User） |
 | `blocks:rebuild` | `blocks.cache.php`（再利用ブロック）を再コンパイルし、全FPCをパージ |
 | `links:rebuild` | `links.cache.php`（`/go/` の別名表）を再コンパイル |
 | `media:gc [--days=N]` | `attachments` のどの行も参照しておらず N 日以上古い `storage/upload/` の孤児ドラフトメディアを回収（既定7日）。`{ab}/{cd}/` シャードを再帰走査 |
 | `media:reshard [--dry-run]` | 既存のフラット配置を `{ab}/{cd}/` 2階層へ移行：ファイル移動＋本文/アイキャッチの公開URLをフラット→シャードへ書換し、検索インデックス・一覧FPC・サイトマップ・フィードを再生成。冪等 |
 | `cache:purge-category {id}` | あるカテゴリの全記事FPCをパージ（精密クリーンアップ） |
 | `config:rebuild` | `env.cache.php` を明示的に再生成 |
-| `feed:rebuild` | 全言語と、フィードを有効にした全カテゴリのフィードを再生成（`FEED_ENABLED=true`） |
+| `feed:rebuild` | 全言語と、フィードを有効にした全カテゴリ・全連載のフィードを再生成（`FEED_ENABLED=true`） |
 | `posts:publish-due` | `published_at` が到来した `scheduled` 記事を昇格（cron / 手動トリガー） |
 | `schedule:recompile` | `next_schedule.php`（次の擬似cron発火時刻）を再計算 |
 
@@ -581,6 +586,8 @@ hayabusapress/
 │   ├── LinkCompiler.php        # /go/{alias} → links.cache.php（DBを引かずに 302）
 │   ├── RedirectCompiler.php    # 旧スラッグ → redirects.cache.php（DBを引かずに 301）
 │   ├── SpeakerCompiler.php     # :::say の話者 → speakers.cache.php
+│   ├── Series.php              # 連載：順序・前後の記事・変更が及ぶページの精密パージ
+│   ├── SeriesCompiler.php      # 連載 → series.cache.php（タイトル・状態・カウンタ）
 │   ├── PostCompiler.php        # 記事ごとに記録した生 HTML の許可での再生成・SNS 用文面
 │   ├── ShareText.php           # X の重み付き文字数に収める SNS 用文面
 │   ├── PublishSlots.php        # 毎日の公開枠・次の空き枠・週間の予約マス目
@@ -635,6 +642,7 @@ hayabusapress/
 │   │   ├── schedule.tpl.php        # 日付 × 公開枠
 │   │   ├── templates.tpl.php       # 記事テンプレート
 │   │   ├── speakers.tpl.php        # 吹き出しの話者
+│   │   ├── series.tpl.php          # 連載：設定・順序と章
 │   │   ├── categories.tpl.php
 │   │   ├── tags.tpl.php
 │   │   ├── plugins.tpl.php
@@ -652,6 +660,8 @@ hayabusapress/
 │       ├── tag.tpl.php
 │       ├── archive.tpl.php
 │       ├── search.tpl.php
+│       ├── series.tpl.php          # 連載の目次（任意。無いテーマは同梱テーマのものを使う）
+│       ├── series_nav.tpl.php      # 連載名／前へ・目次・次へ。post.tpl.php から読み込む
 │       ├── 404.tpl.php
 │       └── assets/
 │           ├── style.css           # {# inline_css 'style.css' #} → FPCに焼き込み
@@ -744,11 +754,12 @@ HBP はスキーマ状態を `schema_migrations` テーブルで追跡し、シ�
 INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
   VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>),
          ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>),
-         ('V001004000', 'seo_feeds_templates',               'BASELINE', <now>);
+         ('V001004000', 'seo_feeds_templates',               'BASELINE', <now>),
+         ('V001005000', 'series',                            'BASELINE', <now>);
 ```
 
 - `checksum = 'BASELINE'` は「この行は差分マイグレーションではなくフルスキーマ由来」を示す番兵値 — checksum 検証は `BASELINE` 行をスキップします。
-- `db:install` はこの INSERT を**含めて**フルスキーマを適用するため、新規DBは即座に現行版（`V001004000`）= 完全に最新と報告します。`db:migrate` は正しく**未適用なし**を返します（既存カラムを再 `ADD` しようとして事故ることがない）。
+- `db:install` はこの INSERT を**含めて**フルスキーマを適用するため、新規DBは即座に現行版（`V001005000`）= 完全に最新と報告します。`db:migrate` は正しく**未適用なし**を返します（既存カラムを再 `ADD` しようとして事故ることがない）。
 
 #### 3つの保証
 
@@ -769,6 +780,7 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 |---|---|---|
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`、`posts.layout` / `show_toc` / `is_sponsored`、新テーブル `blocks` と `links` |
 | 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`、`categories.hashtags` / `feed_enabled`、新テーブル `post_templates` · `slug_redirects` · `speakers`。適用後に `posts:recompile --reassess` を1回 |
+| 1.5.0 | `V001005000__series` | 新テーブル `series`、`posts.series_id` / `series_order` / `series_part`（`idx_posts_series`）/ `char_count` / `reading_minutes`。適用後に `posts:recompile` を1回 |
 
 > これは HBP の憲法の範囲内に収まります：純PHP + PDO、生SQL、外部ツールゼロ（Flyway/Liquibase なし）。新規インストールの正規経路は常にフルスキーマファイルです。
 
@@ -794,6 +806,7 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 16 | `post_templates` | 新しい記事のひな形（記事へ写すだけで、つながりは持たない） |
 | 17 | `slug_redirects` | 公開済み記事の旧スラッグ → `post_id`。301 で返す |
 | 18 | `speakers` | `:::say` 吹き出しの話者（`slug` で一意・名前・画像・左右） |
+| 19 | `series` | 連載（`lang` + `slug` で一意・説明・状態・表紙・`feed_enabled`・`post_count` / `char_count` のカウンタ） |
 
 ### `posts` テーブルの主要カラム
 
@@ -815,6 +828,8 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | `meta_description_auto` | 保存時に本文から作る抜粋。`meta_description` が空のときに使う |
 | `share_text` / `share_text_auto` | 手入力の SNS 用文面 / 保存時に作る SNS 用文面（JSON Feed の `_hbp.share_text`） |
 | `raw_html_allowed` / `content_saved_by` | 最後に本文を保存した人が `post:raw_html` を持っていたか、それが誰か（`0` は Super User）。再生成はロールではなくこれを使う |
+| `series_id` / `series_order` / `series_part` | 所属する連載・連載内の位置（10 刻み）・章見出し。連載を削除すると `series_id` は `NULL` に戻る |
+| `char_count` / `reading_minutes` | 描画後の本文の文字数と読了時間。保存時に計算する |
 | `user_id` | `NULL` = Super User。`ON DELETE RESTRICT` — スタッフ削除前に再割り当てが必要 |
 
 > インデックス `idx_posts_schedule (status, published_at)` が `WHERE status='scheduled' AND published_at <= NOW()` の検索を駆動。全一覧インデックスは `published_at DESC` でソート。
@@ -928,6 +943,8 @@ EMBED_HOSTS="www.youtube-nocookie.com,player.vimeo.com"  # frame-src
 <?php echo PluginManager::snippet('body_end'); ?>    <!-- </body> の直前 -->
 {{{ SidebarCompiler::areaFor('content_before', $lang ?? '', $layout ?? null) }}}
 ```
+
+連載も同じです。`series.tpl.php` を持たないテーマには同梱テーマの目次が使われます（外枠はそのテーマの header / footer、CSS もそのテーマのもの。`hbp-series-*` の class にスタイルを当ててください）。一方、記事ページの前後リンクは、テーマの `post.tpl.php` が出力したときだけ表示されます。`{% include 'series_nav' %}` を書くか、`$post['series']`（`title`・`url`・`status`・`part`・`prev` / `next` ＝ `{title, url}` または null）から自前で組んでください。
 
 ### 3つの鉄則
 

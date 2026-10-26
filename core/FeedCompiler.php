@@ -23,6 +23,8 @@ declare(strict_types=1);
  *                                                  categories with feed_enabled (every language,
  *                                                  under feeds/ so no directory shadows the
  *                                                  /post/category/{slug} route)
+ *   public/feeds/{lang}/series/{slug}.{atom.xml,rss.xml,json}
+ *                                                  series with feed_enabled (same reason)
  *
  * Which formats exist is FEED_FORMAT: atom | rss | json | both (= atom,rss) | all, or a comma list.
  * JSON Feed items carry an "_hbp" extension with the post's social-post text and hashtags, for
@@ -63,12 +65,18 @@ class FeedCompiler
     /** Path of a category feed file. */
     public static function categoryFile(string $lang, string $slug, string $format): string
     {
-        return PUBLIC_PATH . self::CATEGORY_DIR . "/{$lang}/category/{$slug}." . self::FORMATS[$format][0];
+        return self::listFile('category', $lang, $slug, $format);
+    }
+
+    /** Path of a category ('category') or series ('series') feed file. */
+    public static function listFile(string $kind, string $lang, string $slug, string $format): string
+    {
+        return PUBLIC_PATH . self::CATEGORY_DIR . "/{$lang}/{$kind}/{$slug}." . self::FORMATS[$format][0];
     }
 
     /**
-     * Generate the feeds for the given language, and for each of its categories that has
-     * feed_enabled. Category feeds of categories no longer enabled are removed.
+     * Generate the feeds for the given language, and for each of its categories and series that has
+     * feed_enabled. Feeds of categories and series no longer enabled are removed.
      * Does nothing when FEED_ENABLED=false.
      *
      * @param string $lang language code (e.g. 'ja', 'en')
@@ -143,11 +151,38 @@ class FeedCompiler
             $keep[(string)$c['slug']] = true;
         }
 
-        // Remove feeds of categories that were disabled, renamed or deleted
-        foreach (glob(PUBLIC_PATH . self::CATEGORY_DIR . "/{$lang}/category/*") ?: [] as $f) {
-            $slug = preg_replace('/\.(atom\.xml|rss\.xml|json)$/', '', basename($f));
-            if (!isset($keep[$slug])) {
-                @unlink($f);
+        // A series feed follows the series as it grows: its newest posts, like any other feed
+        $keepSeries = [];
+        foreach (DB::fetchAll('SELECT id, slug, title FROM series WHERE lang = ? AND feed_enabled = TRUE', [$lang]) as $sr) {
+            $seriesPosts = DB::fetchAll(
+                "SELECT {$cols}
+                   FROM posts
+                  WHERE type = 'post' AND status = 'published' AND series_id = ?
+               ORDER BY published_at DESC
+                  LIMIT ?",
+                [(int)$sr['id'], $itemCount]
+            );
+            $base = PUBLIC_PATH . self::CATEGORY_DIR . "/{$lang}/series/{$sr['slug']}";
+            if (!is_dir(dirname($base))) {
+                mkdir(dirname($base), 0755, true);
+            }
+            self::writeAll(
+                $seriesPosts, $cats, $lang, $siteUrl, $siteName . ' - ' . $sr['title'],
+                "{$siteUrl}{$feedBase}/post/series/{$sr['slug']}",
+                $siteUrl . self::CATEGORY_DIR . "/{$lang}/series/{$sr['slug']}",
+                $base,
+                "{$siteUrl}{$feedBase}/post/series/{$sr['slug']}"
+            );
+            $keepSeries[(string)$sr['slug']] = true;
+        }
+
+        // Remove feeds of categories and series that were disabled, renamed or deleted
+        foreach (['category' => $keep, 'series' => $keepSeries] as $kind => $kept) {
+            foreach (glob(PUBLIC_PATH . self::CATEGORY_DIR . "/{$lang}/{$kind}/*") ?: [] as $f) {
+                $slug = preg_replace('/\.(atom\.xml|rss\.xml|json)$/', '', basename($f));
+                if (!isset($kept[$slug])) {
+                    @unlink($f);
+                }
             }
         }
     }

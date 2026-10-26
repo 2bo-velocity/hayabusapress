@@ -3,12 +3,17 @@
 
 <article class="hbp-single-post" itemscope itemtype="https://schema.org/Article">
     <header class="hbp-article-header">
+        <?php $seriesNavPlace = 'top'; ?>
+        {% include 'series_nav' %}
         <h1 class="hbp-article-title" itemprop="headline">{{ $post['title'] }}</h1>
         <div class="hbp-article-meta">
             <time itemprop="datePublished" datetime="{{ Format::iso($post['published_at']) }}">{{ Format::date($post['published_at']) }}</time>
             <meta itemprop="dateModified" content="{{ $post['updated_at'] }}">
             {% if $post['status'] === 'scheduled' %}<span class="hbp-scheduled-badge">{@ scheduled @}</span>{% endif %}
             {% if $post['author']['name'] %}<span itemprop="author">{{ $post['author']['name'] }}</span>{% endif %}
+            <?php if (Env::bool('SHOW_READING_TIME', true) && (int)($post['reading_minutes'] ?? 0) > 0): ?>
+            <span class="hbp-reading-time"><?= htmlspecialchars(sprintf($__['reading_minutes'] ?? '%d min read', (int)$post['reading_minutes']), ENT_QUOTES, 'UTF-8') ?></span>
+            <?php endif; ?>
             {% if $post['comment_count'] > 0 %}
             <span><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="hbp-icon-inline"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg> {{ $post['comment_count'] }}</span>
             {% endif %}
@@ -40,6 +45,9 @@
     </div>
 
     {{{ SidebarCompiler::areaFor('content_after', $lang ?? '', $layout ?? null) }}}
+
+    <?php $seriesNavPlace = 'bottom'; ?>
+    {% include 'series_nav' %}
 
     <!-- Social share -->
     {% if $post['show_share'] %}
@@ -139,7 +147,10 @@
     </div>
     {% endif %}
 
-    {% if $_GET['commented'] %}<p class="hbp-comment-thanks">{@ comment_thanks @}</p>{% endif %}
+    <?php /* Shown by app.js when the URL has ?commented=1: the page itself is cached for everyone,
+             so it must not depend on the query string (a server-side check would bake the thank-you
+             into the cache for every visitor once the commenter happened to regenerate it). */ ?>
+    <p class="hbp-comment-thanks" id="hbpCommentThanks" hidden>{@ comment_thanks @}</p>
 
     <div class="hbp-comment-form-wrap">
         <h4>{@ comment_form_title @}</h4>

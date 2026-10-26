@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
--- HayabusaPress (HBP) - MySQL 8.x Schema (HBP 1.4.0 / V001004000)
+-- HayabusaPress (HBP) - MySQL 8.x Schema (HBP 1.5.0 / V001005000)
 -- InnoDB / utf8mb4_unicode_ci
 --
 -- The complete, current form of the schema, used for new installs. The schema_migrations INSERT at
@@ -16,6 +16,7 @@
 --   4. Widget settings, theme layouts, reusable blocks and managed links (V001003000)
 --   5. Auto descriptions, share text, raw-HTML provenance, category feeds, post templates, slug
 --      redirects and speakers (V001004000)
+--   6. Series (ordered runs of posts), character count and reading time (V001005000)
 
 SET NAMES utf8mb4;
 SET CHARACTER SET utf8mb4;
@@ -71,6 +72,27 @@ CREATE TABLE IF NOT EXISTS `tags` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
+-- series (an ordered run of posts; posts.series_id points here)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `series` (
+  `id`               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `lang`             VARCHAR(5)   NOT NULL DEFAULT 'en' COMMENT 'Content language code; every post in the series has it',
+  `slug`             VARCHAR(255) NOT NULL,
+  `title`            VARCHAR(255) NOT NULL,
+  `description`      TEXT         NULL DEFAULT NULL COMMENT 'Markdown',
+  `description_html` TEXT         NULL DEFAULT NULL COMMENT 'Rendered on save',
+  `status`           VARCHAR(16)  NOT NULL DEFAULT 'ongoing' COMMENT 'ongoing|completed|hiatus',
+  `cover_image`      VARCHAR(255) NULL DEFAULT NULL COMMENT 'Image URL path',
+  `feed_enabled`     TINYINT(1)   NOT NULL DEFAULT 0 COMMENT 'Publish /feeds/{lang}/series/{slug}.*',
+  `post_count`       INT          NOT NULL DEFAULT 0 COMMENT 'Published posts. Moved by deltas in core/Counters.php',
+  `char_count`       BIGINT       NOT NULL DEFAULT 0 COMMENT 'Characters of the published posts. Moved by deltas',
+  `created_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_series_lang_slug` (`lang`, `slug`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
 -- posts (articles and static pages unified)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS `posts` (
@@ -81,8 +103,13 @@ CREATE TABLE IF NOT EXISTS `posts` (
   `title`                VARCHAR(255)  NOT NULL,
   `content_markdown`     LONGTEXT      NOT NULL,
   `content_html`         LONGTEXT      NOT NULL,
+  `char_count`           INT           NOT NULL DEFAULT 0 COMMENT 'Characters of the body, counted on save',
+  `reading_minutes`      SMALLINT      NOT NULL DEFAULT 0 COMMENT 'Reading time in minutes, computed on save',
   `status`               VARCHAR(20)   NOT NULL COMMENT 'published|draft|scheduled',
   `category_id`          INT UNSIGNED  NULL DEFAULT NULL,
+  `series_id`            INT UNSIGNED  NULL DEFAULT NULL COMMENT 'Series this post belongs to',
+  `series_order`         INT           NOT NULL DEFAULT 0 COMMENT 'Position in the series (spaced by 10)',
+  `series_part`          VARCHAR(100)  NULL DEFAULT NULL COMMENT 'Chapter heading within the series',
   `tags_cache`           TEXT          NULL DEFAULT NULL COMMENT 'JSON',
   `allow_comment`        TINYINT(1)    NOT NULL DEFAULT 1,
   `show_related_posts`   TINYINT(1)    NOT NULL DEFAULT 1,
@@ -120,8 +147,10 @@ CREATE TABLE IF NOT EXISTS `posts` (
   KEY `idx_posts_schedule`          (`status`, `published_at`),
   KEY `idx_posts_admin_list`        (`type`, `deleted_at`, `updated_at` DESC),
   KEY `idx_posts_created`           (`type`, `created_at`),
+  KEY `idx_posts_series`            (`series_id`, `status`, `series_order`, `id`),
   CONSTRAINT `fk_posts_category` FOREIGN KEY (`category_id`) REFERENCES `categories` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_posts_user`     FOREIGN KEY (`user_id`)     REFERENCES `users`      (`id`) ON DELETE RESTRICT
+  CONSTRAINT `fk_posts_user`     FOREIGN KEY (`user_id`)     REFERENCES `users`      (`id`) ON DELETE RESTRICT,
+  CONSTRAINT `fk_posts_series`   FOREIGN KEY (`series_id`)   REFERENCES `series`     (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -387,4 +416,5 @@ INSERT IGNORE INTO `navigation_menus` (`location`, `title`, `url`, `sort_order`)
 INSERT IGNORE INTO `schema_migrations` (`version`, `name`, `checksum`, `applied_at`) VALUES
   ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', NOW()),
   ('V001003000', 'widgets_layouts_links',             'BASELINE', NOW()),
-  ('V001004000', 'seo_feeds_templates',               'BASELINE', NOW());
+  ('V001004000', 'seo_feeds_templates',               'BASELINE', NOW()),
+  ('V001005000', 'series',                            'BASELINE', NOW());

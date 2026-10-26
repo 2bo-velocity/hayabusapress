@@ -169,6 +169,12 @@ class SeoCompiler
 
         // Structured data: the post itself, then where it sits in the site
         $home = $siteUrl . $langPrefix . '/';
+        $series = null;
+        if ($post['type'] === 'post' && !empty($post['series_id'])) {
+            require_once CORE_PATH . '/SeriesCompiler.php';
+            $series = SeriesCompiler::get((int)$post['series_id']);
+        }
+        $seriesUrl = $series !== null ? $siteUrl . $langPrefix . '/post/series/' . $series['slug'] : '';
         if ($post['type'] === 'post') {
             $author  = class_exists('AuthorCompiler') ? AuthorCompiler::get(isset($post['user_id']) ? (int)$post['user_id'] : null) : [];
             $article = [
@@ -185,6 +191,9 @@ class SeoCompiler
             ];
             if ($descRaw !== '') $article['description'] = $descRaw;
             if ($imgAbs !== '')  $article['image'] = [$imgAbs];
+            if ($series !== null) {
+                $article['isPartOf'] = ['@type' => 'CreativeWorkSeries', 'name' => $series['title'], 'url' => $seriesUrl];
+            }
             $html .= self::jsonLd(array_filter($article, static fn($v) => $v !== null));
         } else {
             $page = ['@context' => 'https://schema.org', '@type' => 'WebPage', 'name' => (string)($post['title'] ?? ''), 'url' => $urlRaw, 'inLanguage' => $postLang];
@@ -193,7 +202,10 @@ class SeoCompiler
         }
 
         $crumbs = [[$siteNameRaw, $home]];
-        if ($post['type'] === 'post' && !empty($post['category_id']) && class_exists('CategoryCompiler')) {
+        if ($series !== null) {
+            // A post of a series sits under the series, not under its category
+            $crumbs[] = [$series['title'], $seriesUrl];
+        } elseif ($post['type'] === 'post' && !empty($post['category_id']) && class_exists('CategoryCompiler')) {
             foreach (CategoryCompiler::load() as $cat) {
                 if ((int)$cat['id'] === (int)$post['category_id']) {
                     $crumbs[] = [(string)$cat['name'], $siteUrl . $langPrefix . '/post/category/' . $cat['slug']];
@@ -238,6 +250,60 @@ class SeoCompiler
         } else {
             $html .= self::breadcrumbs([[$siteName, $home], [$name, $url]]);
         }
+        return $html;
+    }
+
+    /**
+     * Head tags for a series' table of contents (/post/series/{slug}): the series' own description
+     * and cover, a CreativeWorkSeries and the breadcrumbs.
+     *
+     * @param array  $series the series row
+     * @param string $url    this page's canonical URL
+     */
+    public static function buildSeriesMeta(array $series, string $url, string $lang): string
+    {
+        $global   = self::loadGlobal();
+        $siteName = (string)($global['site_name'] ?? '') !== '' ? (string)$global['site_name'] : Env::get('SITE_NAME', 'HayabusaPress');
+        $siteUrl  = rtrim(Env::get('SITE_URL', ''), '/');
+        $default  = Env::get('SITE_DEFAULT_LANG', 'en');
+        $home     = $siteUrl . ($lang === $default ? '' : "/{$lang}") . '/';
+        $e        = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+        $name     = (string)$series['title'];
+        $desc     = self::excerpt((string)($series['description_html'] ?? ''));
+        if ($desc === '') $desc = (string)($global['default_description'] ?? '');
+        $cover    = (string)($series['cover_image'] ?? '');
+        $coverAbs = $cover === '' ? '' : (preg_match('#^https?://#', $cover) ? $cover : $siteUrl . '/' . ltrim($cover, '/'));
+
+        $html  = '<title>' . $e(self::title($name, $global)) . "</title>\n";
+        if ($desc !== '') $html .= '<meta name="description" content="' . $e($desc) . "\">\n";
+        $html .= '<meta property="og:title" content="' . $e($name) . "\">\n";
+        if ($url !== '') $html .= '<meta property="og:url" content="' . $e($url) . "\">\n";
+        $html .= "<meta property=\"og:type\" content=\"website\">\n";
+        if ($desc !== '') $html .= '<meta property="og:description" content="' . $e($desc) . "\">\n";
+        $html .= '<meta property="og:site_name" content="' . $e($siteName) . "\">\n";
+        if ($coverAbs !== '') {
+            $html .= '<meta property="og:image" content="' . $e($coverAbs) . "\">\n";
+            $html .= "<meta name=\"twitter:card\" content=\"summary_large_image\">\n";
+            $html .= '<meta name="twitter:image" content="' . $e($coverAbs) . "\">\n";
+        } else {
+            $html .= "<meta name=\"twitter:card\" content=\"summary\">\n";
+        }
+
+        // Feed autodiscovery for the series' own feed (FeedCompiler writes it when feed_enabled)
+        if (!empty($series['feed_enabled']) && Env::bool('FEED_ENABLED', true)) {
+            require_once CORE_PATH . '/FeedCompiler.php';
+            $labels = ['atom' => 'Atom', 'rss' => 'RSS', 'json' => 'JSON Feed'];
+            foreach (FeedCompiler::formats() as $fmt) {
+                $href  = $siteUrl . FeedCompiler::CATEGORY_DIR . "/{$lang}/series/{$series['slug']}." . FeedCompiler::FORMATS[$fmt][0];
+                $html .= '<link rel="alternate" type="' . FeedCompiler::FORMATS[$fmt][1] . '" title="' . $e($name . ' (' . $labels[$fmt] . ')') . '" href="' . $e($href) . "\">\n";
+            }
+        }
+
+        $work = ['@context' => 'https://schema.org', '@type' => 'CreativeWorkSeries', 'name' => $name, 'url' => $url, 'inLanguage' => $lang];
+        if ($desc !== '')     $work['description'] = $desc;
+        if ($coverAbs !== '') $work['image'] = $coverAbs;
+        $html .= self::jsonLd($work);
+        $html .= self::breadcrumbs([[$siteName, $home], [$name, $url]]);
         return $html;
     }
 

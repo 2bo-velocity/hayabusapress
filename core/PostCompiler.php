@@ -78,7 +78,7 @@ final class PostCompiler
     }
 
     /**
-     * Re-render posts with their recorded trust.
+     * Re-render posts with their recorded trust (and recount their characters and reading time).
      *
      * @param int[]|null $ids null = every post
      * @return int number of posts re-rendered
@@ -100,13 +100,60 @@ final class PostCompiler
         foreach (DB::fetchAll($sql, $params) as $post) {
             $html = self::render($post);
             $auto = SeoCompiler::excerpt($html);
+            [$chars, $minutes] = self::textStats($html);
             DB::execute(
-                'UPDATE posts SET content_html = ?, meta_description_auto = ? WHERE id = ?',
-                [$html, $auto !== '' ? mb_substr($auto, 0, 255) : null, (int)$post['id']]
+                'UPDATE posts SET content_html = ?, meta_description_auto = ?, char_count = ?, reading_minutes = ? WHERE id = ?',
+                [$html, $auto !== '' ? mb_substr($auto, 0, 255) : null, $chars, $minutes, (int)$post['id']]
             );
             $count++;
         }
+        if ($count > 0) {
+            // Each series keeps the sum of its posts' char_count, which this pass may have changed
+            require_once CORE_PATH . '/Counters.php';
+            require_once CORE_PATH . '/SeriesCompiler.php';
+            Counters::rebuildSeries();
+            SeriesCompiler::compile();
+        }
         return $count;
+    }
+
+    /**
+     * Character count and reading time of a rendered body (posts.char_count / reading_minutes).
+     *
+     * Counted from the HTML the reader sees, so Markdown syntax never inflates it. Left out: ruby
+     * readings (<rt>/<rp>: a novel's length is counted on the base text), code, the baked table of
+     * contents and the sponsored notice (neither is prose of the post). Whitespace is not counted.
+     *
+     * Reading time adds the two ways text is read: CJK characters (Japanese, Chinese and Korean are
+     * not written in space-separated words) by characters per minute, and the rest by words per
+     * minute. A sum rather than a switch on the CJK ratio, so a body mixing the two has no cliff
+     * where one extra character halves or doubles the result. The speeds come from .env; changing
+     * them takes a posts:recompile, because the result is baked on save.
+     *
+     * @return array{0:int,1:int} [characters, minutes]; minutes is 0 only for an empty body
+     */
+    public static function textStats(string $html): array
+    {
+        $html = preg_replace([
+            '#<(rt|rp|pre|code|script|style)\b[^>]*>.*?</\1>#is',
+            '#<nav class="hbp-toc"[^>]*>.*?</nav>#is',
+            '#<p class="hbp-sponsored-notice">.*?</p>#is',
+        ], ' ', $html) ?? $html;
+        // Tags become spaces so that words in adjacent blocks do not run together
+        $text  = html_entity_decode(strip_tags(str_replace('<', ' <', $html)), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $chars = mb_strlen(preg_replace('/\s+/u', '', $text) ?? '');
+        if ($chars === 0) {
+            return [0, 0];
+        }
+        // CJK characters are timed one by one, together with the CJK punctuation, the middle dot and
+        // the long vowel mark ー (which Unicode puts in no script). What is left is split into words.
+        $cjkClass = '[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\x{3000}-\x{303F}\x{30FB}\x{30FC}\x{FF01}-\x{FF60}\x{FF70}]';
+        $cjk      = preg_match_all('/' . $cjkClass . '/u', $text);
+        $rest     = preg_replace('/' . $cjkClass . '/u', ' ', $text) ?? '';
+        $words    = preg_match_all('/[\p{L}\p{N}]+(?:[\'’.\-][\p{L}\p{N}]+)*/u', $rest);
+        $minutes  = $cjk / max(1, Env::int('READING_SPEED_CJK', 500))
+                  + $words / max(1, Env::int('READING_SPEED_WORDS', 220));
+        return [$chars, (int)min(32767, max(1, (int)ceil($minutes)))];
     }
 
     /**

@@ -55,4 +55,18 @@ return [
     'back_home'              => '← Back to Home',
 
     'scheduled'              => 'Scheduled',
+
+    // Series (1.5.0). %d is a number; series_chars takes a formatted number (%s).
+    'series_label'            => 'Series',
+    'series_status_ongoing'   => 'Ongoing',
+    'series_status_completed' => 'Completed',
+    'series_status_hiatus'    => 'On hiatus',
+    'series_count'            => '%d parts',
+    'series_chars'            => '%s characters',
+    'series_start'            => 'Start from the beginning',
+    'series_index'            => 'Contents',
+    'series_prev'             => '← Previous',
+    'series_next'             => 'Next →',
+    'series_nav_aria'         => 'Series navigation',
+    'reading_minutes'         => '%d min read',
 ];

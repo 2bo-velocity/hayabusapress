@@ -6,8 +6,8 @@
 //
 // Path form (/page/2), not ?page=2. Two reasons:
 //   - The router only understands /page/N; the query form silently returned page 1 forever.
-//   - The FPC fast path in public/index.php is gated on empty($_GET), so a ?page=2 link means
-//     page 2 onward can never be served from cache. The path form has an FPC key already.
+//   - The FPC key comes from the path alone (a query string is ignored outside search), so a
+//     ?page=2 link would just serve page 1 from cache. The path form has an FPC key of its own.
 //
 // Prev/next only, with no page count: a real total needs COUNT(*) over the whole listing, which is
 // exactly the per-request full scan this engine exists to avoid. $hasNext already respects

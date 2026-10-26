@@ -144,15 +144,25 @@ class HbpAntispamPlugin
 
             fwrite($sock, $packet);
             $response = fread($sock, 512);
+            // Read the timeout flag while the socket is still open: on a closed resource
+            // stream_get_meta_data() throws, which the catch below turned into "unknown" for every
+            // lookup, so no IP was ever reported as listed.
+            $meta = stream_get_meta_data($sock);
             fclose($sock);
 
-            if ($response === false || strlen($response) < 12) {
-                return null; // Malformed response -> fail open
+            if (!empty($meta['timed_out']) || $response === false || strlen($response) < 12) {
+                return null; // Timeout / malformed response -> fail open
             }
-
-            // Timeout check
-            $meta = stream_get_meta_data($sock ?? null);
-            if (isset($meta['timed_out']) && $meta['timed_out']) {
+            // The answer must be to this query (same ID). NXDOMAIN (RCODE 3) is how a DNSBL says
+            // "not listed"; any other error code is unknown.
+            if (substr($response, 0, 2) !== $id) {
+                return null;
+            }
+            $rcode = ord($response[3]) & 0x0F;
+            if ($rcode === 3) {
+                return false;
+            }
+            if ($rcode !== 0) {
                 return null;
             }
 
@@ -166,6 +176,12 @@ class HbpAntispamPlugin
             // Simple parse: the last 4 bytes of the response are the IPv4 address
             $ipBytes = substr($response, -4);
             if (strlen($ipBytes) === 4 && ord($ipBytes[0]) === 127) {
+                // 127.255.255.x is an error answer, not a listing (Spamhaus: 252 = typo in the zone,
+                // 254 = query through a public/open resolver, 255 = excessive queries). Counting it
+                // as "listed" would mark every visitor as spam, so it is treated as unknown.
+                if (ord($ipBytes[1]) === 255 && ord($ipBytes[2]) === 255) {
+                    return null;
+                }
                 return true;
             }
 
@@ -210,6 +226,7 @@ class HbpAntispamPlugin
      */
     private static function autoBlock(string $ip, string $signal): void
     {
+        require_once CORE_PATH . '/IpBlocklist.php';   // not loaded by the public front controller
         if (class_exists('IpBlocklist')) {
             IpBlocklist::autoBlock($ip, $signal);
         }

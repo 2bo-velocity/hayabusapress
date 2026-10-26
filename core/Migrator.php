@@ -181,6 +181,12 @@ class Migrator
     {
         try {
             $rows = DB::fetchAll('SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version');
+            // checksum is CHAR(64): PostgreSQL returns the 'BASELINE' sentinel padded with spaces,
+            // which would never equal the sentinel and report every baseline row as tampered.
+            foreach ($rows as &$r) {
+                $r['checksum'] = rtrim((string)$r['checksum']);
+            }
+            unset($r);
             return array_column($rows, null, 'version');
         } catch (Throwable) {
             return [];

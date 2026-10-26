@@ -25,7 +25,7 @@ class SidebarCompiler
     /** All widget types (sidebar_widgets.widget_key). */
     public const WIDGET_KEYS = [
         'search', 'recent_comments', 'archive', 'categories', 'tags',
-        'recent_posts', 'posts_pick', 'text', 'image', 'html', 'menu',
+        'recent_posts', 'posts_pick', 'text', 'image', 'html', 'menu', 'series',
     ];
 
     /** Upper bound for recent_posts.count and the number of posts_pick ids. */
@@ -226,6 +226,7 @@ class SidebarCompiler
             'image'           => self::widgetImage($title, $settings),
             'html'            => self::widgetHtml($title, $settings),
             'menu'            => self::widgetMenu($title, $settings),
+            'series'          => self::widgetSeries($title ?? ($__['series_label'] ?? 'Series'), $settings, $lang, $__),
             default           => '',
         };
     }
@@ -382,6 +383,34 @@ class SidebarCompiler
         return self::postList('widget-recent-posts', $title, $rows, $lang);
     }
 
+    /**
+     * Series of this language that have published posts, from series.cache.php (no query).
+     * settings.status: '' = every series, or one of Series::STATUSES. settings.count caps the list.
+     */
+    private static function widgetSeries(string $title, array $settings, string $lang, array $__): string
+    {
+        require_once CORE_PATH . '/Series.php';
+        require_once CORE_PATH . '/SeriesCompiler.php';
+        $status = (string)($settings['status'] ?? '');
+        $count  = max(1, min(self::LIST_MAX, (int)($settings['count'] ?? 10)));
+        $rows   = array_filter(
+            SeriesCompiler::all($lang),
+            static fn(array $s): bool => $s['post_count'] > 0 && ($status === '' || $s['status'] === $status)
+        );
+        if (!$rows) {
+            return '';
+        }
+        $defaultLang = (class_exists('Env') ? Env::get('SITE_DEFAULT_LANG', 'en') : ($_ENV['SITE_DEFAULT_LANG'] ?? 'en'));
+        $html = '<div class="widget widget-series">' . self::heading($title) . '<ul>';
+        foreach (array_slice(array_values($rows), 0, $count) as $s) {
+            $href  = htmlspecialchars(Series::path($s, $defaultLang), ENT_QUOTES, 'UTF-8');
+            $label = htmlspecialchars($s['title'], ENT_QUOTES, 'UTF-8');
+            $state = htmlspecialchars((string)($__['series_status_' . $s['status']] ?? ''), ENT_QUOTES, 'UTF-8');
+            $html .= "<li><a href=\"{$href}\">{$label}</a>" . ($state !== '' ? " <span class=\"widget-series-status\">{$state}</span>" : '') . '</li>';
+        }
+        return $html . '</ul></div>';
+    }
+
     /** Hand-picked posts/pages, in the order given. Unpublished or other-language ids are skipped. */
     private static function widgetPostsPick(?string $title, array $settings, string $lang): string
     {
@@ -485,6 +514,7 @@ class SidebarCompiler
         return match ($key) {
             'recent_posts' => ['count' => 5],
             'menu'         => ['location' => 'pc_footer'],
+            'series'       => ['count' => 10, 'status' => ''],
             default        => null,
         };
     }
@@ -506,6 +536,10 @@ class SidebarCompiler
                                   array_map('intval', preg_split('/[\s,]+/', (string)($in['ids'] ?? '')) ?: []),
                                   static fn(int $id): bool => $id > 0
                               ))), 0, self::LIST_MAX)],
+            'series'       => [
+                'count'  => max(1, min(self::LIST_MAX, (int)($in['count'] ?? 10))),
+                'status' => in_array($in['status'] ?? '', ['ongoing', 'completed', 'hiatus'], true) ? (string)$in['status'] : '',
+            ],
             'text'         => ['body' => $str('body', self::BODY_MAX)],
             'html'         => ['body' => $str('body', self::BODY_MAX)],
             'image'        => [

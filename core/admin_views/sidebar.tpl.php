@@ -14,6 +14,7 @@ $widgetLabels = [
     'image'           => '{@ widget_image @}',
     'html'            => '{@ widget_html @}',
     'menu'            => '{@ widget_menu @}',
+    'series'          => '{@ widget_series @}',
 ];
 $areaLabels = [
     'sidebar_right'  => '{@ sidebar_right @}',
@@ -103,6 +104,22 @@ $e = static fn($v): string => htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8');
         <div>
             <label class="block text-xs font-medium text-slate-500 mb-1">{@ widget_count @}</label>
             <input type="number" min="1" max="<?= SidebarCompiler::LIST_MAX ?>" name="<?= $name ?>[settings][count]" value="<?= (int)($s['count'] ?? 5) ?>" class="<?= $inputClass ?>">
+        </div>
+        <?php elseif ($key === 'series'): ?>
+        <div class="grid grid-cols-2 gap-2">
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1">{@ widget_series_count @}</label>
+                <input type="number" min="1" max="<?= SidebarCompiler::LIST_MAX ?>" name="<?= $name ?>[settings][count]" value="<?= (int)($s['count'] ?? 10) ?>" class="<?= $inputClass ?>">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1">{@ status @}</label>
+                <select name="<?= $name ?>[settings][status]" class="<?= $inputClass ?>">
+                    <option value="">{@ filter_any @}</option>
+                    <option value="ongoing" <?= ($s['status'] ?? '') === 'ongoing' ? 'selected' : '' ?>>{@ series_status_ongoing @}</option>
+                    <option value="completed" <?= ($s['status'] ?? '') === 'completed' ? 'selected' : '' ?>>{@ series_status_completed @}</option>
+                    <option value="hiatus" <?= ($s['status'] ?? '') === 'hiatus' ? 'selected' : '' ?>>{@ series_status_hiatus @}</option>
+                </select>
+            </div>
         </div>
         <?php elseif ($key === 'posts_pick'): ?>
         <div>

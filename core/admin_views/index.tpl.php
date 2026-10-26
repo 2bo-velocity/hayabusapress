@@ -32,7 +32,7 @@
 {% endif %}
 
 <!-- search / filtering (on mobile, collapsed in a details element = bottom-sheet-like; expanded on PC) -->
-<details class="mb-4 bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden" {% if $filters['q'] || $filters['type'] || $filters['status'] || $filters['category_id'] || $filters['tag_id'] || $filters['pub_from'] || $filters['cre_from'] %}open{% endif %}>
+<details class="mb-4 bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden" {% if $filters['q'] || $filters['type'] || $filters['status'] || $filters['category_id'] || $filters['tag_id'] || $filters['series_id'] || $filters['pub_from'] || $filters['cre_from'] %}open{% endif %}>
     <summary class="cursor-pointer select-none px-4 py-3 text-sm font-medium text-slate-600 dark:text-slate-300">
         <svg class="w-4 h-4 inline-block align-text-bottom mr-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>{@ filter @}
     </summary>
@@ -73,6 +73,18 @@
                 {% endforeach %}
             </select>
         </div>
+
+        <?php if (!empty($allSeries)): ?>
+        <div>
+            <label class="block text-xs text-slate-500 mb-1">{@ series @}</label>
+            <select name="series_id" class="w-full text-base px-3 py-2 border border-slate-200 dark:border-slate-700 rounded-xl dark:bg-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:border-emerald-500">
+                <option value="">{@ filter_any @}</option>
+                {% foreach $allSeries as $sr %}
+                <option value="{{ $sr['id'] }}" {% if (int)($filters['series_id'] ?? 0) === (int)$sr['id'] %}selected{% endif %}>{{ $sr['title'] }} ({{ $sr['lang'] }})</option>
+                {% endforeach %}
+            </select>
+        </div>
+        <?php endif; ?>
 
         <div>
             <label class="block text-xs text-slate-500 mb-1">{@ tags @}</label>

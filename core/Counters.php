@@ -1,6 +1,6 @@
 <?php
 /**
- * HayabusaPress - Incremental post counters for categories and tags.
+ * HayabusaPress - Incremental post counters for categories, tags and series.
  *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  * Licensed under the GNU AGPL v3 or later, with the HayabusaPress Plugin & Theme Exception
@@ -9,7 +9,7 @@
 declare(strict_types=1);
 
 /**
- * categories.post_count / tags.post_count
+ * categories.post_count / tags.post_count / series.post_count + series.char_count
  *
  * The sidebar shows "Category (12)", so the counts have to exist. They used to be produced by a
  * COUNT(*) ... GROUP BY across every published post, recomputed for *all* categories and *all* tags
@@ -38,7 +38,7 @@ final class Counters
      * Returns null when the post does not exist (before creation / after deletion), which is exactly
      * the "contributes nothing" case.
      *
-     * @return array{type:string,status:string,deleted_at:?string,category_id:?int,tag_ids:int[]}|null
+     * @return array{type:string,status:string,deleted_at:?string,category_id:?int,series_id:?int,char_count:int,tag_ids:int[]}|null
      */
     public static function snapshot(int $postId): ?array
     {
@@ -47,7 +47,7 @@ final class Counters
         }
         try {
             $row = DB::fetchOne(
-                'SELECT type, status, deleted_at, category_id FROM posts WHERE id = ? LIMIT 1',
+                'SELECT type, status, deleted_at, category_id, series_id, char_count FROM posts WHERE id = ? LIMIT 1',
                 [$postId]
             );
             if (!$row) {
@@ -63,6 +63,8 @@ final class Counters
             'status'      => (string)($row['status'] ?? ''),
             'deleted_at'  => $row['deleted_at'] ?? null,
             'category_id' => $row['category_id'] !== null ? (int)$row['category_id'] : null,
+            'series_id'   => $row['series_id'] !== null ? (int)$row['series_id'] : null,
+            'char_count'  => (int)($row['char_count'] ?? 0),
             'tag_ids'     => array_map('intval', array_column($tagRows, 'tag_id')),
         ];
     }
@@ -88,6 +90,24 @@ final class Counters
             }
         }
 
+        // --- series: published posts and their characters ---
+        $oldSeries = $beforeVisible ? ($before['series_id'] ?? null) : null;
+        $newSeries = $afterVisible  ? ($after['series_id']  ?? null) : null;
+        $oldChars  = (int)($before['char_count'] ?? 0);
+        $newChars  = (int)($after['char_count']  ?? 0);
+        if ($oldSeries !== null && $oldSeries === $newSeries) {
+            if ($oldChars !== $newChars) {
+                self::bumpSeries($oldSeries, 0, $newChars - $oldChars);
+            }
+        } else {
+            if ($oldSeries !== null) {
+                self::bumpSeries($oldSeries, -1, -$oldChars);
+            }
+            if ($newSeries !== null) {
+                self::bumpSeries($newSeries, +1, $newChars);
+            }
+        }
+
         // --- tags ---
         $oldTags = $beforeVisible ? ($before['tag_ids'] ?? []) : [];
         $newTags = $afterVisible  ? ($after['tag_ids']  ?? []) : [];
@@ -102,7 +122,7 @@ final class Counters
     }
 
     /**
-     * Recompute both counter tables from the source of truth.
+     * Recompute every counter table from the source of truth.
      * Set-based, so nothing is loaded into PHP memory regardless of the post count.
      */
     public static function rebuildAll(): void
@@ -123,6 +143,21 @@ final class Counters
                     AND pt.type = 'post' AND pt.status = 'published'
              )"
         );
+        self::rebuildSeries();
+    }
+
+    /** Recompute series.post_count / char_count only (posts:recompile changes every char_count). */
+    public static function rebuildSeries(): void
+    {
+        DB::execute(
+            "UPDATE series SET
+                 post_count = (SELECT COUNT(*) FROM posts p
+                                WHERE p.series_id = series.id AND p.type = 'post'
+                                  AND p.status = 'published' AND p.deleted_at IS NULL),
+                 char_count = (SELECT COALESCE(SUM(p.char_count), 0) FROM posts p
+                                WHERE p.series_id = series.id AND p.type = 'post'
+                                  AND p.status = 'published' AND p.deleted_at IS NULL)"
+        );
     }
 
     // ------------------------------------------------------------
@@ -134,6 +169,19 @@ final class Counters
             && ($snap['type'] ?? '') === 'post'
             && ($snap['status'] ?? '') === 'published'
             && empty($snap['deleted_at']);
+    }
+
+    /** Move a series' post and character counters, clamped at zero like bump(). */
+    private static function bumpSeries(int $id, int $posts, int $chars): void
+    {
+        try {
+            DB::execute(
+                'UPDATE series SET post_count = GREATEST(post_count + ?, 0), char_count = GREATEST(char_count + ?, 0) WHERE id = ?',
+                [$posts, $chars, $id]
+            );
+        } catch (Throwable $e) {
+            error_log('[HBP COUNTERS] ' . $e->getMessage());
+        }
     }
 
     /**

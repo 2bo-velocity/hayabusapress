@@ -33,6 +33,7 @@ class HbpContactPlugin
         $inputMessage = '';
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            require_once CORE_PATH . '/IpBlocklist.php';   // not loaded by the public front controller
             // B-series: IpBlocklist check at the front line of write POSTs
             $clientIp = class_exists('AccessControl') ? AccessControl::clientIp() : ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
             if (class_exists('IpBlocklist') && IpBlocklist::isBlocked($clientIp)) {
@@ -41,6 +42,14 @@ class HbpContactPlugin
                     http_response_code(403);
                     exit;
                 }
+            }
+
+            // Per-IP sending rate (CONTACT_RATE_LIMIT, "count/seconds"): every accepted message is a mail
+            // to the site owner, so a flood here is a flood of their inbox
+            if (class_exists('IpBlocklist') && IpBlocklist::rateLimited('contact', $clientIp, 'CONTACT_RATE_LIMIT', '3/600')) {
+                http_response_code(429);
+                header('Retry-After: 600');
+                exit;
             }
 
             // Fire the before_contact_send hook (automatic integration with anti-spam, etc.)
@@ -66,14 +75,21 @@ class HbpContactPlugin
 
             // Honeypot (spam-bot defense; last line of defense even when the plugin is disabled)
             if (!empty($_POST['hbp_hp_email_field'])) {
+                if (class_exists('IpBlocklist')) {
+                    IpBlocklist::autoBlock($clientIp, 'honeypot');
+                }
                 $sent = true; // Pretend a normal completion to the bot
             } else {
-                $inputName    = trim($_POST['contact_name']    ?? '');
-                $inputEmail   = trim($_POST['contact_email']   ?? '');
-                $inputMessage = trim($_POST['contact_message'] ?? '');
+                // Arrays (field[]=...) are treated as empty rather than reaching trim() and a 500
+                $str          = static fn($v): string => is_string($v) ? $v : '';
+                $inputName    = mb_substr(trim($str($_POST['contact_name']    ?? '')), 0, 100);
+                $inputEmail   = mb_substr(trim($str($_POST['contact_email']   ?? '')), 0, 255);
+                $inputMessage = trim($str($_POST['contact_message'] ?? ''));
 
                 if ($inputName === '' || $inputEmail === '' || $inputMessage === '') {
                     $error = $dict['hbp-contact.required'] ?? 'All fields are required.';
+                } elseif (mb_strlen($inputMessage) > 10000) {
+                    $error = $dict['hbp-contact.too_long'] ?? 'The message is too long (10,000 characters at most).';
                 } elseif (!filter_var($inputEmail, FILTER_VALIDATE_EMAIL)) {
                     $error = $dict['hbp-contact.invalid_email'] ?? 'Invalid email address.';
                 } else {

@@ -18,6 +18,10 @@ class CommentController
 {
     public static function store(array $post, string $ip): bool
     {
+        // Loaded here, not guarded by class_exists(): the public front controller does not load it,
+        // and the guard used to skip the blocklist (and everything below that relies on it) silently.
+        require_once CORE_PATH . '/IpBlocklist.php';
+
         // ---- Stage 0: site-specific IP blocklist (front line of write POSTs) ----
         // Fail open on DB error (lets the post through)
         if (class_exists('IpBlocklist') && IpBlocklist::isBlocked($ip)) {
@@ -27,6 +31,13 @@ class CommentController
                 exit;
             }
             // moderate: to the pending queue (just save via the normal flow)
+        }
+
+        // ---- Stage 0.5: per-IP submission rate (COMMENT_RATE_LIMIT, "count/seconds") ----
+        if (class_exists('IpBlocklist') && IpBlocklist::rateLimited('comment', $ip, 'COMMENT_RATE_LIMIT', '5/600')) {
+            http_response_code(429);
+            header('Retry-After: 600');
+            exit;
         }
 
         // ---- Stage 1: serial static-hook execution (before_comment_create) ----
@@ -49,15 +60,20 @@ class CommentController
 
         // ---- Stage 2: honeypot (last line of defense even when the plugin is disabled) ----
         if (!empty($post['honey_pot_email'])) {
+            if (class_exists('IpBlocklist')) {
+                IpBlocklist::autoBlock($ip, 'honeypot');   // counts toward BLOCKLIST_AUTO_THRESHOLD
+            }
             return true; // Pretend a normal completion to the bot
         }
 
         // ---- Stage 3: input validation ----
-        $postId    = (int)($post['post_id']     ?? 0);
-        $name      = trim($post['author_name']  ?? '');
-        $email     = trim($post['author_email'] ?? '');
-        $authorUrl = trim($post['author_url']   ?? '');
-        $content   = trim($post['content']      ?? '');
+        // Fields arrive as arrays when a bot posts name[]=...; trim() would throw a TypeError (a 500)
+        $str = static fn($v): string => is_string($v) ? $v : '';
+        $postId    = is_numeric($post['post_id'] ?? null) ? (int)$post['post_id'] : 0;
+        $name      = trim($str($post['author_name']  ?? ''));
+        $email     = trim($str($post['author_email'] ?? ''));
+        $authorUrl = trim($str($post['author_url']   ?? ''));
+        $content   = trim($str($post['content']      ?? ''));
 
         // email is optional. Only name + body are required.
         if ($postId <= 0 || $name === '' || $content === '') {
