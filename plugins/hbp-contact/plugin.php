@@ -70,7 +70,17 @@ class HbpContactPlugin
                 if (!method_exists($class, $method)) {
                     continue;
                 }
-                call_user_func_array([$class, $method], [&$sendContext]);
+                // A listener that throws is skipped (logged); the honeypot and validation below still apply.
+                try {
+                    call_user_func_array([$class, $method], [&$sendContext]);
+                } catch (Throwable $e) {
+                    error_log(sprintf(
+                        '[HBP WARNING] before_contact_send listener %s::%s failed: %s',
+                        $class,
+                        $method,
+                        $e->getMessage()
+                    ));
+                }
             }
 
             // Honeypot (spam-bot defense; last line of defense even when the plugin is disabled)

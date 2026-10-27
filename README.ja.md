@@ -344,6 +344,7 @@ Nginx では `deploy/nginx.sample.conf` がフィードのファイルを直接�
 |---|---|
 | `system:init` | 全キャッシュをコンパイル：ルート・メニュー・カテゴリ・タグ・サイドバー・SEO・プラグイン・著者シングルトン・セキュリティヘッダ |
 | `plugins:rebuild` | プラグインレジストリ＋優先度ソート済みフックマップを再コンパイル、ルート同期 |
+| `plugins:checksums {dir\|id}` | 全ファイルの SHA-256 を `manifest.json` の `"files"` に書く。署名するパッケージ用（`REQUIRE_SIGNED_PLUGINS`） |
 | `lang:rebuild [locale]` | 指定ロケール（または全ロケール）のMUIビューキャッシュを削除し再焼き付けを強制 |
 | `assets:rebuild` | テーマCSS/JS編集後、全FPC＋ビューキャッシュをパージし CSP ハッシュを再計算 |
 | `authors:rebuild` | `authors.cache.php` を再生成し、影響を受ける記事FPCをパージ |
@@ -922,6 +923,8 @@ EMBED_HOSTS="www.youtube-nocookie.com,player.vimeo.com"  # frame-src
   }
 }
 ```
+
+フック・ルート・`template_route` の `file` は、そのプラグインのディレクトリ内にある `.php` ファイルに限ります。それ以外のパスは `plugins:rebuild` のときに読み飛ばします（PHP のエラーログに警告を出します）。
 
 ### 静的な HTML 断片（snippets）
 

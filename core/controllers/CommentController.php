@@ -55,7 +55,19 @@ class CommentController
             if (!method_exists($hook['class'], $hook['method'])) {
                 continue;
             }
-            call_user_func_array([$hook['class'], $hook['method']], [&$context]);
+            // A listener that throws must not turn every comment into a 500. It is skipped and the
+            // rest still run; the honeypot, validation and moderation below still apply.
+            // (An interceptor blocks with exit, which is not a Throwable and is not caught here.)
+            try {
+                call_user_func_array([$hook['class'], $hook['method']], [&$context]);
+            } catch (Throwable $e) {
+                error_log(sprintf(
+                    '[HBP WARNING] before_comment_create listener %s::%s failed: %s',
+                    $hook['class'],
+                    $hook['method'],
+                    $e->getMessage()
+                ));
+            }
         }
 
         // ---- Stage 2: honeypot (last line of defense even when the plugin is disabled) ----

@@ -507,6 +507,9 @@ return [
     'err_trusted_keys_missing' => 'PLUGIN_TRUSTED_KEYS が設定されていません。',
     'err_sig_missing' => 'manifest.json.sig が存在しません（署名必須）。',
     'err_sig_verify_failed' => '署名検証に失敗しました（信頼されたキーと一致しません）。',
+    'err_checksums_missing' => 'manifest.json にチェックサムの一覧（"files"）がありません（署名付きプラグインでは必須です）。',
+    'err_checksum_mismatch' => '署名で保証されていないファイルがあります: ',
+    'err_checksum_missing_file' => 'manifest.json に記載されたファイルがありません: ',
 
     // --- message catalog: crypto / view / validation ---
     'err_app_key_missing'      => 'APP_KEY が設定されていません。php core/cli.php tool:key で生成してください。',

@@ -352,6 +352,7 @@ per-category feeds under `/feeds/{lang}/category/`.
 |---|---|
 | `system:init` | Compile all caches: routes, menus, categories, tags, sidebars, SEO, plugins, author singleton, security headers |
 | `plugins:rebuild` | Recompile plugin registry + priority-sorted hook map; sync routes |
+| `plugins:checksums {dir\|id}` | Write the SHA-256 of every file into `manifest.json` `"files"`, for a package to be signed (`REQUIRE_SIGNED_PLUGINS`) |
 | `lang:rebuild [locale]` | Delete MUI view caches for a locale (or all locales) to force re-bake |
 | `assets:rebuild` | Purge all FPC + view caches + recompile CSP hashes after theme CSS/JS edits |
 | `authors:rebuild` | Rebuild `authors.cache.php` + purge affected post FPCs |
@@ -929,6 +930,8 @@ Without this file, the admin panel falls back to Tailwind Play CDN (development 
   }
 }
 ```
+
+The `file` of a hook, a route or a `template_route` must be a `.php` file inside the plugin's own directory. Any other path is skipped at `plugins:rebuild` (with a warning in the PHP error log).
 
 ### Static Snippets
 

@@ -87,10 +87,8 @@ class PluginManager
 
             // Hook compilation
             foreach ($meta['hooks'] ?? [] as $eventName => $hookDef) {
-                $relFile = ltrim($hookDef['file'] ?? '', '/');
-                $absFile = ROOT_PATH . '/' . $relFile;
-
-                if (!file_exists($absFile)) {
+                $absFile = self::resolveCodeFile($dir, $hookDef['file'] ?? '');
+                if ($absFile === null) {
                     continue;
                 }
 
@@ -104,10 +102,8 @@ class PluginManager
 
             // Static route compilation (from the routes declaration in manifest.json)
             foreach ($meta['routes'] ?? [] as $routePath => $routeDef) {
-                $relFile = ltrim($routeDef['file'] ?? '', '/');
-                $absFile = ROOT_PATH . '/' . $relFile;
-
-                if (!file_exists($absFile)) {
+                $absFile = self::resolveCodeFile($dir, $routeDef['file'] ?? '');
+                if ($absFile === null) {
                     continue;
                 }
 
@@ -125,9 +121,8 @@ class PluginManager
                 // Save the route definition under the page_template key
                 if (isset($meta['template_route'])) {
                     $routeDef = $meta['template_route'];
-                    $relFile  = ltrim($routeDef['file'] ?? '', '/');
-                    $absFile  = ROOT_PATH . '/' . $relFile;
-                    if (file_exists($absFile)) {
+                    $absFile  = self::resolveCodeFile($dir, $routeDef['file'] ?? '');
+                    if ($absFile !== null) {
                         $pluginRoutes['__template__' . $templateKey] = [
                             'file'   => $absFile,
                             'class'  => $routeDef['class']  ?? '',
@@ -217,6 +212,29 @@ class PluginManager
      * Line endings are normalized to LF: the browser hashes an inline script after the HTML parser
      * has done the same, so a CRLF file would otherwise never match its CSP hash.
      */
+    /**
+     * Resolve the "file" of a hook / route / template_route to an absolute path, or null.
+     *
+     * The manifest writes it relative to the install root ("/plugins/{id}/plugin.php"). It must
+     * be a .php file inside the plugin's own directory: the entry is require'd at request time,
+     * so a path to another plugin, the core or a non-PHP file such as .env (whose contents
+     * require would print to the visitor) is refused.
+     */
+    private static function resolveCodeFile(string $pluginDir, mixed $relFile): ?string
+    {
+        if (!is_string($relFile) || $relFile === '') {
+            return null;
+        }
+        $base = realpath($pluginDir);
+        $path = realpath(ROOT_PATH . '/' . ltrim($relFile, '/'));
+        if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR)
+            || !is_file($path) || strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'php') {
+            error_log("[HBP WARNING] plugin file '{$relFile}' in " . basename($pluginDir) . ' is missing, not a .php file or outside the plugin directory -- skipped.');
+            return null;
+        }
+        return $path;
+    }
+
     private static function readSnippet(string $pluginDir, string $relFile): ?string
     {
         $base = realpath($pluginDir);
@@ -467,51 +485,6 @@ class PluginManager
             is_dir($path) ? self::removeDir($path) : unlink($path);
         }
         rmdir($dir);
-    }
-
-    // ----------------------------------------------------------------
-    // ZIP auto-install (the three big checks)
-    // ----------------------------------------------------------------
-
-    public static function installFromZip(array $uploadedFile): bool
-    {
-        // (1) MIME / extension check
-        $ext = strtolower(pathinfo($uploadedFile['name'], PATHINFO_EXTENSION));
-        if ($ext !== 'zip') return false;
-
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        if ($finfo->file($uploadedFile['tmp_name']) !== 'application/zip') return false;
-
-        $zip = new ZipArchive();
-        if ($zip->open($uploadedFile['tmp_name']) !== true) return false;
-
-        // (2) Path-traversal attack check
-        for ($i = 0; $i < $zip->numFiles; $i++) {
-            $name = $zip->getNameIndex($i);
-            if (str_contains($name, '..') || str_contains($name, "\0")) {
-                $zip->close();
-                return false;
-            }
-        }
-
-        // (3) manifest.json existence check (decided without extracting a single file)
-        $hasManifest = false;
-        for ($i = 0; $i < $zip->numFiles; $i++) {
-            $parts = explode('/', $zip->getNameIndex($i));
-            if (end($parts) === 'manifest.json' && count($parts) === 2) {
-                $hasManifest = true;
-                break;
-            }
-        }
-        if (!$hasManifest) {
-            $zip->close();
-            return false;
-        }
-
-        $zip->extractTo(self::PLUGINS_DIR);
-        $zip->close();
-        self::rebuildCache();
-        return true;
     }
 
     // ----------------------------------------------------------------

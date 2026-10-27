@@ -43,6 +43,7 @@ match ($command) {
     'tool:hash'        => cmd_hash($arg),
     'system:init'      => cmd_init(),
     'plugins:rebuild'  => cmd_plugins_rebuild(),
+    'plugins:checksums' => cmd_plugins_checksums($arg),
     'lang:rebuild'     => cmd_lang_rebuild($arg),
     'lang:check'       => cmd_lang_check(implode(' ', array_slice($argv, 2))),
     'lang:publish'     => cmd_lang_publish($arg),
@@ -111,6 +112,8 @@ Usage:
   # Cache / build
   php core/cli.php system:init                   Regenerate all caches
   php core/cli.php plugins:rebuild               Recompile plugin registry + hook map
+  php core/cli.php plugins:checksums {dir|id}    Write the SHA-256 of every file into manifest.json "files"
+                                                 (sign manifest.json afterwards; see REQUIRE_SIGNED_PLUGINS)
   php core/cli.php lang:rebuild [locale]         Cleanse per-locale view cache
   php core/cli.php lang:check [locale] [--strict] Verify catalogs against the English master
   php core/cli.php lang:publish {locale}         Scaffold a new locale from the English master
@@ -294,6 +297,41 @@ function cmd_plugins_rebuild(): void
     echo "  routes.cache.php                     [OK]\n";
 
     echo "\nplugins:rebuild complete.\n";
+}
+
+/**
+ * Write manifest.json's "files" map ({relative path: sha256}) for a plugin package, so that a
+ * signature over manifest.json covers every file (REQUIRE_SIGNED_PLUGINS). Run it last, right
+ * before signing: any later change to a file makes the installer refuse the package.
+ */
+function cmd_plugins_checksums(string $target): void
+{
+    if ($target === '') {
+        echo "Error: please specify a plugin directory or the id of an installed plugin.\n";
+        exit(1);
+    }
+    $dir = is_dir($target) ? $target : ROOT_PATH . '/plugins/' . $target;
+    $manifestFile = rtrim($dir, '/') . '/manifest.json';
+    if (!is_file($manifestFile)) {
+        echo "Error: manifest.json not found in {$dir}\n";
+        exit(1);
+    }
+    $manifest = json_decode((string)file_get_contents($manifestFile), true);
+    if (!is_array($manifest)) {
+        echo "Error: manifest.json is not valid JSON.\n";
+        exit(1);
+    }
+
+    require_once CORE_PATH . '/PluginInstaller.php';
+    $manifest['files'] = PluginInstaller::checksums($dir);
+
+    $json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+    if (file_put_contents($manifestFile, $json, LOCK_EX) === false) {
+        echo "Error: could not write {$manifestFile}\n";
+        exit(1);
+    }
+    echo count($manifest['files']) . " file(s) listed in {$manifestFile}\n";
+    echo "Now sign manifest.json and save the base64 signature as manifest.json.sig.\n";
 }
 
 function cmd_assets_rebuild(): void

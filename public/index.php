@@ -712,7 +712,13 @@ function handlePlugin(string $pluginId, string $lang, array $cfg): void
     }
 
     $context = ['lang' => $lang, 'plugin_id' => $pluginId];
-    $class::$method($context);
+    try {
+        $class::$method($context);
+    } catch (Throwable $e) {
+        // Name the plugin in the log, then let the global handler answer 500 as for any other error
+        error_log(sprintf('[HBP WARNING] plugin route %s (%s::%s) failed: %s', $pluginId, $class, $method, $e->getMessage()));
+        throw $e;
+    }
 }
 
 function handleSpecial(string $endpoint): void

@@ -507,6 +507,9 @@ return [
     'err_trusted_keys_missing' => 'PLUGIN_TRUSTED_KEYS is not configured.',
     'err_sig_missing' => 'manifest.json.sig does not exist (signature required).',
     'err_sig_verify_failed' => 'Signature verification failed (no trusted key matched).',
+    'err_checksums_missing' => 'manifest.json has no "files" checksum list (required for signed plugins).',
+    'err_checksum_mismatch' => 'File is not covered by the signature: ',
+    'err_checksum_missing_file' => 'File listed in manifest.json is missing: ',
 
     // --- message catalog: crypto / view / validation ---
     'err_app_key_missing'      => 'APP_KEY is not set. Generate one with: php core/cli.php tool:key',

@@ -81,7 +81,9 @@ class PluginInstaller
         $topDir   = array_key_first($topDirs);
         $stageDir = self::STAGE_DIR . '/' . $topDir . '.' . getmypid();
 
-        // Manual extraction to staging
+        // Manual extraction to staging. Start from an empty directory: the name reuses the PID, which
+        // PHP-FPM workers share across requests, so leftovers of an earlier attempt would be mixed in.
+        self::cleanStage($stageDir);
         @mkdir($stageDir, 0755, true);
         $stageReal = realpath($stageDir);
         if ($stageReal === false) {
@@ -116,7 +118,8 @@ class PluginInstaller
 
             $ext  = strtolower(pathinfo($name, PATHINFO_EXTENSION));
             $bare = $ext === '' && in_array(strtoupper(basename($name)), self::ALLOWED_BARE_NAMES, true);
-            if (!$bare && !in_array($ext, self::ALLOWED_EXTS, true)) {
+            // The detached signature is accepted by its exact name and place only (no other .sig)
+            if (!$bare && $rel !== 'manifest.json.sig' && !in_array($ext, self::ALLOWED_EXTS, true)) {
                 $zip->close();
                 self::cleanStage($stageDir);
                 throw new RuntimeException(HbpLocale::t('err_ext_not_allowed', 'Disallowed extension: .') . $ext);
@@ -170,7 +173,12 @@ class PluginInstaller
 
         // Ed25519 signature verification (optional)
         if (Env::bool('REQUIRE_SIGNED_PLUGINS', false)) {
-            self::verifySodiumSignature($stageDir, $manifest);
+            try {
+                self::verifySodiumSignature($stageDir, $manifest);
+            } catch (RuntimeException $e) {
+                self::cleanStage($stageDir);
+                throw $e;
+            }
         }
 
         // Move to plugins/{id} via an atomic rename
@@ -215,15 +223,72 @@ class PluginInstaller
         if (!is_file($sigFile)) {
             throw new RuntimeException(HbpLocale::t('err_sig_missing', 'manifest.json.sig does not exist (signature required).'));
         }
-        $sig     = base64_decode(file_get_contents($sigFile), true);
+        $sig     = base64_decode(trim((string)file_get_contents($sigFile)), true);
         $message = file_get_contents($stageDir . '/manifest.json');
+        $signed  = false;
         foreach ($trustedKeys as $pubKeyB64) {
             $pubKey = base64_decode($pubKeyB64, true);
-            if ($pubKey && sodium_crypto_sign_verify_detached($sig, $message, $pubKey)) {
-                return;
+            if ($sig !== false && strlen($sig) === SODIUM_CRYPTO_SIGN_BYTES
+                && $pubKey !== false && strlen($pubKey) === SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES
+                && sodium_crypto_sign_verify_detached($sig, $message, $pubKey)) {
+                $signed = true;
+                break;
             }
         }
-        throw new RuntimeException(HbpLocale::t('err_sig_verify_failed', 'Signature verification failed (no trusted key matched).'));
+        if (!$signed) {
+            throw new RuntimeException(HbpLocale::t('err_sig_verify_failed', 'Signature verification failed (no trusted key matched).'));
+        }
+        // The signature covers manifest.json only, so it vouches for the rest of the package
+        // through the SHA-256 of every file listed in manifest.json's "files".
+        self::verifyChecksums($stageDir, $manifest);
+    }
+
+    /**
+     * Check every extracted file against manifest.json's "files" map ({relative path: sha256 hex}).
+     * A file that is not listed, a hash that differs and a listed file that is missing all fail.
+     */
+    private static function verifyChecksums(string $stageDir, array $manifest): void
+    {
+        $listed = $manifest['files'] ?? null;
+        if (!is_array($listed) || $listed === []) {
+            throw new RuntimeException(HbpLocale::t('err_checksums_missing', 'manifest.json has no "files" checksum list (required for signed plugins).'));
+        }
+        $actual = self::checksums($stageDir);
+        foreach ($actual as $rel => $hash) {
+            if (!isset($listed[$rel]) || !is_string($listed[$rel]) || !hash_equals(strtolower($listed[$rel]), $hash)) {
+                throw new RuntimeException(HbpLocale::t('err_checksum_mismatch', 'File is not covered by the signature: ') . $rel);
+            }
+        }
+        foreach (array_keys($listed) as $rel) {
+            if (!isset($actual[$rel])) {
+                throw new RuntimeException(HbpLocale::t('err_checksum_missing_file', 'File listed in manifest.json is missing: ') . $rel);
+            }
+        }
+    }
+
+    /**
+     * SHA-256 of every file in a plugin directory, keyed by path relative to it (with "/").
+     * manifest.json and its signature are left out: they carry the list rather than being listed.
+     *
+     * @return array<string,string>
+     */
+    public static function checksums(string $dir): array
+    {
+        $base  = rtrim($dir, '/') . '/';
+        $files = [];
+        $it    = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS));
+        foreach ($it as $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+            $rel = str_replace('\\', '/', substr($file->getPathname(), strlen($base)));
+            if ($rel === 'manifest.json' || $rel === 'manifest.json.sig') {
+                continue;
+            }
+            $files[$rel] = hash_file('sha256', $file->getPathname());
+        }
+        ksort($files, SORT_STRING);
+        return $files;
     }
 
     private static function cleanStage(string $dir): void
