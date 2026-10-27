@@ -436,6 +436,9 @@ CSS_DELIVERY=external
 THEME_SHOWS_AUTHOR_IN_LIST=false
 ALLOW_PLUGIN_INSTALL=false
 ALLOW_THEME_INSTALL=false
+#WEB_UPGRADE_UNTIL="YYYY-MM-DD HH:MM"
+PLUGIN_MODIFIED_ACTION=warn
+INTEGRITY_MAIL=true
 REQUIRE_SIGNED_PLUGINS=false
 PLUGIN_TRUSTED_KEYS=""
 MAIL_FROM="noreply@example.com"
@@ -510,7 +513,7 @@ ENV,
             $pluginsDir = ROOT_PATH . '/plugins';
             if (is_dir($pluginsDir)) {
                 foreach (scandir($pluginsDir) as $pluginId) {
-                    if ($pluginId === '.' || $pluginId === '..') continue;
+                    if ($pluginId[0] === '.' || $pluginId[0] === '_') continue;   // _incoming/ etc. are not plugins
                     $pluginSql = $pluginsDir . '/' . $pluginId . '/database/install.' . $dbDriver . '.sql';
                     if (!file_exists($pluginSql)) continue;
                     $pluginSqlContent = file_get_contents($pluginSql);

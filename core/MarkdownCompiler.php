@@ -37,6 +37,53 @@ class MarkdownCompiler
 
     /** Content language of the current render (cards and speakers are per language). */
     private static string $lang = '';
+    /**
+     * Run the content_render listeners (PluginManager::getHooks()) over a body's HTML.
+     *
+     * A filter, not an interceptor: each listener may rewrite $context['html'] and nothing else is
+     * read back. A listener that throws, or leaves something other than a string, is skipped: the
+     * HTML goes on as it was before it, and the error is logged for the plugins screen. The same
+     * body must give the same HTML (preview and posts:recompile run the filters again), so
+     * listeners must not depend on time, randomness or anything outside the post.
+     */
+    private static function contentFilters(string $html, string $markdown, bool $allowRawHtml, array $options): string
+    {
+        if (!is_file(CORE_PATH . '/PluginManager.php')) {
+            return $html;
+        }
+        require_once CORE_PATH . '/PluginManager.php';
+        foreach (PluginManager::getHooks('content_render') as $hook) {
+            if (empty($hook['file']) || !is_file($hook['file'])) {
+                continue;
+            }
+            require_once $hook['file'];
+            if (empty($hook['class']) || empty($hook['method']) || !method_exists($hook['class'], $hook['method'])) {
+                continue;
+            }
+            $context = [
+                'html'             => $html,
+                'markdown'         => $markdown,
+                'post_id'          => isset($options['post_id']) ? (int)$options['post_id'] : null,
+                'type'             => (string)($options['type'] ?? 'post'),
+                'lang'             => (string)($options['lang'] ?? ''),
+                'raw_html_allowed' => $allowRawHtml,
+            ];
+            try {
+                call_user_func_array([$hook['class'], $hook['method']], [&$context]);
+                if (!is_string($context['html'])) {
+                    throw new UnexpectedValueException('content_render listener left html as ' . get_debug_type($context['html']));
+                }
+                $html = $context['html'];
+            } catch (Throwable $e) {
+                error_log(sprintf('[HBP WARNING] content_render listener %s::%s failed: %s', $hook['class'], $hook['method'], $e->getMessage()));
+                if (class_exists('PluginErrors')) {
+                    PluginErrors::record(PluginErrors::pluginOfFile($hook['file']) ?? '?', 'content_render', $e->getMessage());
+                }
+            }
+        }
+        return $html;
+    }
+
     /** Card slugs that did not resolve in the last render (for the editor's warning). */
     private static array $missingCards = [];
 
@@ -55,10 +102,13 @@ class MarkdownCompiler
      * @param bool   $allowRawHtml true = administrator/SU (pass raw HTML through), false = low-trust role (escape everything)
      * @param array  $options      'toc' => bool (bake a table of contents from H2/H3),
      *                             'sponsored' => bool (prepend the sponsored-content notice, rel="sponsored" on outbound links),
-     *                             'lang' => content language of the notice
+     *                             'lang' => content language of the notice,
+     *                             'filters' => bool (run the plugins' content_render filters: post and page
+     *                             bodies only, through PostCompiler::render()), with 'post_id' and 'type'
      */
     public static function render(string $markdown, bool $allowRawHtml = false, array $options = []): string
     {
+        $source = $markdown;
         self::$usedIds      = [];
         self::$missingCards = [];
         self::$lang         = (string)($options['lang'] ?? '');
@@ -66,6 +116,12 @@ class MarkdownCompiler
         $markdown = str_replace([self::TOKEN, "\x05"], '', $markdown);
         $lines = explode("\n", str_replace("\r\n", "\n", $markdown));
         $html  = self::parseBlocks($lines, $allowRawHtml);
+
+        // Plugins' save-time filters: after Markdown, before the sanitizer, so what they add is held
+        // to the same trust as the post itself
+        if (!empty($options['filters'])) {
+            $html = self::contentFilters($html, $source, $allowRawHtml, $options);
+        }
 
         // DOM allowlist sanitizer (always applied)
         if (class_exists('HtmlSanitizer')) {

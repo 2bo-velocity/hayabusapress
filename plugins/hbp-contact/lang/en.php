@@ -23,4 +23,5 @@ return [
     'hbp-contact.invalid_email' => 'Please enter a valid email address.',
     'hbp-contact.too_long'      => 'The message is too long (10,000 characters at most).',
     'hbp-contact.failed'        => 'Failed to send message. Please try again later.',
+    'hbp-contact.csrf'          => 'Your session expired. Please send the form again.',
 ];

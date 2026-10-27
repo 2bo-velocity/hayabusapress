@@ -171,7 +171,7 @@ define('CURRENT_LANG', $lang);
 // (4) Plugin routes
 if (isset($cfg['plugins'][$path])) {
     $pluginId = $cfg['plugins'][$path];
-    handlePlugin($pluginId, $lang, $cfg);
+    handlePlugin($pluginId, $path, $lang, $cfg);
     exit;
 }
 
@@ -667,7 +667,7 @@ function serveFeedFile(string $filePath, string $format): void
     exit;
 }
 
-function handlePlugin(string $pluginId, string $lang, array $cfg): void
+function handlePlugin(string $pluginId, string $path, string $lang, array $cfg): void
 {
     // Get plugin info from the plugin cache
     $pluginRoutesFile = STORAGE_PATH . '/cache/plugin_routes.cache.php';
@@ -677,15 +677,12 @@ function handlePlugin(string $pluginId, string $lang, array $cfg): void
     }
     $routes = require $pluginRoutesFile;
 
-    // Resolve the plugin route definition by plugin_id
-    $def = null;
-    // Normal route: search by plugin_id in plugin_routes.cache.php
-    foreach ($routes as $routePath => $routeDef) {
-        if (str_starts_with((string)$routePath, '__template__')) continue;
-        if (is_array($routeDef) && ($routeDef['plugin_id'] ?? '') === $pluginId) {
-            $def = $routeDef;
-            break;
-        }
+    // Normal route: the definition registered for this path. (Looking it up by plugin_id instead
+    // returned the plugin's first route for every one of its paths, so a plugin with two routes
+    // always ran the first route's handler.)
+    $def = $routes[$path] ?? null;
+    if (!is_array($def) || ($def['plugin_id'] ?? '') !== $pluginId) {
+        $def = null;
     }
     // page_template route: search the __template__{id} key
     if ($def === null && isset($routes['__template__' . $pluginId])) {
@@ -717,6 +714,7 @@ function handlePlugin(string $pluginId, string $lang, array $cfg): void
     } catch (Throwable $e) {
         // Name the plugin in the log, then let the global handler answer 500 as for any other error
         error_log(sprintf('[HBP WARNING] plugin route %s (%s::%s) failed: %s', $pluginId, $class, $method, $e->getMessage()));
+        PluginErrors::record(PluginErrors::pluginOfFile($def['file']) ?? $pluginId, 'route', $e->getMessage());
         throw $e;
     }
 }

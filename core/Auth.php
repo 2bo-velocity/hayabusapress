@@ -266,6 +266,135 @@ class Auth
         return self::id() === 0;
     }
 
+    /** How long a confirmed password stays good for the operations that ask for it (seconds). */
+    public const REAUTH_TTL = 600;
+
+    /**
+     * Whether the signed-in user confirmed their password within REAUTH_TTL.
+     * Asked for before an admin-panel operation that changes code or the schema (plugin / theme
+     * installation and deletion): it limits what a stolen session alone can do.
+     */
+    public static function reauthValid(): bool
+    {
+        return self::check()
+            && ($_SESSION['reauth_uid'] ?? null) === self::id()
+            && time() - (int)($_SESSION['reauth_at'] ?? 0) < self::REAUTH_TTL;
+    }
+
+    /** Seconds left before the confirmation has to be repeated (0 = not confirmed). */
+    public static function reauthRemaining(): int
+    {
+        return self::reauthValid() ? self::REAUTH_TTL - (time() - (int)$_SESSION['reauth_at']) : 0;
+    }
+
+    /** Whether confirming asks for an authentication code too (the user has 2FA on). */
+    public static function reauthNeedsCode(): bool
+    {
+        return self::twoFactorSecretFor(self::id()) !== '';
+    }
+
+    /**
+     * Confirm the signed-in user's password (and authentication code when they use 2FA).
+     * Counted by the same Throttle as login, so it cannot be used to guess the password.
+     *
+     * @return string|null null when confirmed, otherwise the message to show
+     */
+    public static function reauthenticate(string $password, string $code = ''): ?string
+    {
+        if (!self::check()) {
+            return HbpLocale::t('err_reauth_failed', 'The password or authentication code is incorrect.');
+        }
+        $id    = self::id();
+        $email = (string)($_SESSION['user_email'] ?? '');
+        $ip    = class_exists('AccessControl') ? AccessControl::clientIp() : ($_SERVER['REMOTE_ADDR'] ?? '');
+
+        if (class_exists('Throttle') && !Throttle::isAllowed($email, $ip)) {
+            return HbpLocale::t('err_reauth_locked', 'Too many failed attempts. Try again in :seconds seconds.',
+                ['seconds' => max(1, Throttle::secondsUntilUnlock($email, $ip))]);
+        }
+
+        if ($id === 0) {
+            $hash = Env::get('SUPER_USER_PASSWORD_HASH', '');
+        } else {
+            $row  = DB::fetchOne('SELECT password_hash FROM users WHERE id = ? LIMIT 1', [$id]);
+            $hash = (string)($row['password_hash'] ?? '');
+        }
+        if ($hash === '') {
+            Hash::verify($password, self::$DUMMY_HASH); // Consume constant time
+            $ok = false;
+        } else {
+            $ok = Hash::verify($password, $hash);
+        }
+
+        if ($ok) {
+            $secret = self::twoFactorSecretFor($id);
+            if ($secret !== '') {
+                $ok = preg_match('/^\d{6}$/', $code) === 1
+                    && TwoFactorAuth::verifyCode($secret, $code)
+                    && self::consumeTimeStep($id);
+            }
+        }
+
+        if (!$ok) {
+            if (class_exists('Throttle')) {
+                Throttle::registerFailure($email, $ip);
+            }
+            return HbpLocale::t('err_reauth_failed', 'The password or authentication code is incorrect.');
+        }
+
+        if (class_exists('Throttle')) {
+            Throttle::clear($email, $ip);
+        }
+        $_SESSION['reauth_uid'] = $id;
+        $_SESSION['reauth_at']  = time();
+        return null;
+    }
+
+    /**
+     * The decrypted TOTP secret of a user with 2FA on, or '' (the same rules as login()).
+     * The Super User's 2FA counts only while two_factor_global.cache.php has it switched on.
+     */
+    private static function twoFactorSecretFor(int $id): string
+    {
+        if ($id === 0) {
+            $secret = Env::get('SUPER_USER_2FA_SECRET', '');
+            $cache  = STORAGE_PATH . '/cache/two_factor_global.cache.php';
+            if ($secret === '' || !is_file($cache)) {
+                return '';
+            }
+            $cfg = require $cache;
+            return !empty($cfg['super_user_2fa_enabled']) ? $secret : '';
+        }
+        $row = DB::fetchOne('SELECT two_factor_secret FROM users WHERE id = ? LIMIT 1', [$id]);
+        $raw = (string)($row['two_factor_secret'] ?? '');
+        if ($raw !== '' && class_exists('Crypto')) {
+            try {
+                return Crypto::decrypt($raw);
+            } catch (Throwable) {
+                return $raw;
+            }
+        }
+        return $raw;
+    }
+
+    /**
+     * Refuse a code from a time-step already used (RFC 6238 replay prevention), as
+     * completeTwoFactor() does. Staff only: the Super User has no row to record it in.
+     */
+    private static function consumeTimeStep(int $id): bool
+    {
+        if ($id === 0) {
+            return true;
+        }
+        $currentStep = (int)floor(time() / 30);
+        $user        = DB::fetchOne('SELECT tfa_last_step FROM users WHERE id = ? LIMIT 1', [$id]);
+        if ((int)($user['tfa_last_step'] ?? 0) >= $currentStep) {
+            return false;
+        }
+        DB::execute('UPDATE users SET tfa_last_step = ? WHERE id = ?', [$currentStep, $id]);
+        return true;
+    }
+
     /** Redirect when not logged in */
     public static function requireLogin(string $adminPath): void
     {

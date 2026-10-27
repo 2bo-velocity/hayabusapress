@@ -122,6 +122,98 @@ class Env
         return in_array($v, ['true', '1', 'yes', 'on'], true);
     }
 
+    /**
+     * Values of the settings that are secrets (passwords, keys, tokens, hashes), longest first, for
+     * masking them out of messages shown on screen. PDO and mail errors can quote a DSN or a value.
+     *
+     * @return string[]
+     */
+    public static function secretValues(): array
+    {
+        $out = [];
+        foreach (self::$map + $_ENV as $k => $v) {
+            if (is_string($k) && is_string($v) && strlen($v) >= 4
+                && preg_match('/PASSWORD|SECRET|TOKEN|HASH|(^|_)KEY(S)?$/', $k)) {
+                $out[$v] = true;
+            }
+        }
+        $values = array_keys($out);
+        usort($values, static fn($a, $b) => strlen((string)$b) <=> strlen((string)$a));
+        return array_map('strval', $values);
+    }
+
+    /** Longest a time-limited switch may be opened ahead (see gate()). */
+    public const GATE_MAX_SECONDS = 86400;
+
+    /**
+     * State of a time-limited switch that lets the admin panel do something that changes code or
+     * the schema (ALLOW_PLUGIN_INSTALL, ALLOW_THEME_INSTALL, WEB_UPGRADE_UNTIL).
+     *
+     * The value is a date and time, "Y-m-d H:i" in APP_TIMEZONE, until which the switch is open. A
+     * plain true would be left on and forgotten; a date closes by itself. A date more than
+     * GATE_MAX_SECONDS ahead is refused, so "2099-01-01 00:00" cannot stand in for true. Only .env
+     * can open a switch, and .env is written over FTP or SSH, not from the admin panel.
+     *
+     * Never throws: a value that cannot be read leaves the switch closed, with the reason.
+     *
+     * @param bool $acceptTrue let a plain true open it (the two install switches, which were booleans)
+     * @return array{open:bool, until:?int, reason:string}
+     *         reason: unset | open | legacy (true) | expired | too_far | invalid
+     */
+    public static function gate(string $key, bool $acceptTrue = false): array
+    {
+        $raw = trim(self::get($key, ''));
+        $low = strtolower($raw);
+        if ($raw === '' || in_array($low, ['false', '0', 'no', 'off'], true)) {
+            return ['open' => false, 'until' => null, 'reason' => 'unset'];
+        }
+        if (in_array($low, ['true', '1', 'yes', 'on'], true)) {
+            return $acceptTrue
+                ? ['open' => true,  'until' => null, 'reason' => 'legacy']
+                : ['open' => false, 'until' => null, 'reason' => 'invalid'];
+        }
+
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i', $raw, self::gateTimezone());
+        $errs = DateTimeImmutable::getLastErrors();
+        // Reject what PHP would quietly roll over ("2026-02-30" becomes March 2)
+        if ($date === false || ($errs !== false && ($errs['warning_count'] > 0 || $errs['error_count'] > 0))
+            || $date->format('Y-m-d H:i') !== $raw) {
+            return ['open' => false, 'until' => null, 'reason' => 'invalid'];
+        }
+
+        $until = $date->getTimestamp();
+        $now   = time();
+        if ($until <= $now) {
+            return ['open' => false, 'until' => $until, 'reason' => 'expired'];
+        }
+        if ($until - $now > self::GATE_MAX_SECONDS) {
+            return ['open' => false, 'until' => $until, 'reason' => 'too_far'];
+        }
+        return ['open' => true, 'until' => $until, 'reason' => 'open'];
+    }
+
+    /** The .env line that opens a switch for an hour from now, for the screen to show. */
+    public static function gateSuggestion(string $key): string
+    {
+        $until = (new DateTimeImmutable('+1 hour', self::gateTimezone()))->format('Y-m-d H:i');
+        return $key . '="' . $until . '"';
+    }
+
+    /** Format a gate's deadline in the timezone it was written in. */
+    public static function gateTime(int $timestamp): string
+    {
+        return (new DateTimeImmutable('@' . $timestamp))->setTimezone(self::gateTimezone())->format('Y-m-d H:i');
+    }
+
+    private static function gateTimezone(): DateTimeZone
+    {
+        try {
+            return new DateTimeZone(self::get('APP_TIMEZONE', 'UTC') ?: 'UTC');
+        } catch (Throwable) {
+            return new DateTimeZone('UTC');
+        }
+    }
+
     /** int conversion. */
     public static function int(string $key, int $default = 0): int
     {

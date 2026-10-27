@@ -66,7 +66,7 @@ class HbpBadwordsPlugin
         file_put_contents(self::$cacheFile, $code, LOCK_EX);
     }
 
-    private static function renderBlockedError(string $redirectBack): never
+    private static function renderBlockedError(string $redirectBack): void   // ends with exit (no "never": PHP 8.0)
     {
         http_response_code(400);
         $back = htmlspecialchars($redirectBack, ENT_QUOTES, 'UTF-8');

@@ -65,7 +65,14 @@ final class PostCompiler
         return [self::currentMayUseRaw(), self::currentSaver()];
     }
 
-    /** Render a stored post row with the trust recorded on it. */
+    /**
+     * Render a post or page body with the trust recorded on it. The one place a body is rendered:
+     * the save, the editor's preview and posts:recompile all come here, so the three give the same
+     * HTML, plugins' content_render filters included.
+     *
+     * @param array $post content_markdown, raw_html_allowed, show_toc, is_sponsored, lang, and
+     *                    id (null for a post not saved yet) and type ('post' or 'page')
+     */
     public static function render(array $post): string
     {
         require_once CORE_PATH . '/MarkdownCompiler.php';
@@ -74,18 +81,28 @@ final class PostCompiler
             'toc'       => !empty($post['show_toc']),
             'sponsored' => !empty($post['is_sponsored']),
             'lang'      => (string)$post['lang'],
+            'filters'   => true,
+            'post_id'   => isset($post['id']) && (int)$post['id'] > 0 ? (int)$post['id'] : null,
+            'type'      => (string)($post['type'] ?? 'post'),
         ]);
     }
 
     /**
      * Re-render posts with their recorded trust (and recount their characters and reading time).
      *
-     * @param int[]|null $ids null = every post
+     * A post that fails to render is skipped and listed in $failed; the others go on. A post whose
+     * body was saved by an editor between the read and the write is left alone: its save already
+     * rendered the newer body, and writing this one would put the older one back.
+     *
+     * @param int[]|null $ids    null = every post
+     * @param bool       $finish refresh what depends on all posts (series counters) when done;
+     *                           false while working through the posts in batches (see finishRecompile())
+     * @param array      $failed receives [id => message] for the posts that failed
      * @return int number of posts re-rendered
      */
-    public static function recompile(?array $ids = null): int
+    public static function recompile(?array $ids = null, bool $finish = true, array &$failed = []): int
     {
-        $sql = 'SELECT id, lang, content_markdown, show_toc, is_sponsored, raw_html_allowed FROM posts';
+        $sql = 'SELECT id, type, lang, content_markdown, show_toc, is_sponsored, raw_html_allowed FROM posts';
         $params = [];
         if ($ids !== null) {
             if ($ids === []) {
@@ -98,23 +115,69 @@ final class PostCompiler
         require_once CORE_PATH . '/SeoCompiler.php';
         $count = 0;
         foreach (DB::fetchAll($sql, $params) as $post) {
-            $html = self::render($post);
-            $auto = SeoCompiler::excerpt($html);
-            [$chars, $minutes] = self::textStats($html);
-            DB::execute(
-                'UPDATE posts SET content_html = ?, meta_description_auto = ?, char_count = ?, reading_minutes = ? WHERE id = ?',
-                [$html, $auto !== '' ? mb_substr($auto, 0, 255) : null, $chars, $minutes, (int)$post['id']]
-            );
-            $count++;
+            try {
+                $html = self::render($post);
+                $auto = SeoCompiler::excerpt($html);
+                [$chars, $minutes] = self::textStats($html);
+                DB::execute(
+                    // md5() rather than "content_markdown = ?": MySQL compares text case-insensitively
+                    // under its default collation, so an edit changing only the case would look unchanged
+                    'UPDATE posts SET content_html = ?, meta_description_auto = ?, char_count = ?, reading_minutes = ?
+                     WHERE id = ? AND md5(content_markdown) = ?',
+                    [$html, $auto !== '' ? mb_substr($auto, 0, 255) : null, $chars, $minutes, (int)$post['id'], md5((string)$post['content_markdown'])]
+                );
+                $count++;
+            } catch (Throwable $e) {
+                $failed[(int)$post['id']] = class_exists('PluginErrors') ? PluginErrors::clean($e->getMessage()) : $e->getMessage();
+            }
         }
-        if ($count > 0) {
-            // Each series keeps the sum of its posts' char_count, which this pass may have changed
-            require_once CORE_PATH . '/Counters.php';
-            require_once CORE_PATH . '/SeriesCompiler.php';
-            Counters::rebuildSeries();
-            SeriesCompiler::compile();
+        if ($count > 0 && $finish) {
+            self::finishSeries();
         }
         return $count;
+    }
+
+    /**
+     * One batch of a recompile that runs over several requests (the admin panel's upgrade, which
+     * has to stay inside max_execution_time): the next $limit posts by id after $afterId.
+     *
+     * @return array{processed:int,last_id:int,done:bool,failed:array<int,string>}
+     */
+    public static function recompileBatch(int $afterId, int $limit = 200): array
+    {
+        $ids = array_map('intval', array_column(
+            DB::fetchAll('SELECT id FROM posts WHERE id > ? ORDER BY id LIMIT ' . max(1, $limit), [$afterId]),
+            'id'
+        ));
+        $failed    = [];
+        $processed = $ids === [] ? 0 : self::recompile($ids, false, $failed);
+        return [
+            'processed' => $processed,
+            'last_id'   => $ids === [] ? $afterId : max($ids),
+            'done'      => count($ids) < $limit,
+            'failed'    => $failed,
+        ];
+    }
+
+    /**
+     * After every post was re-rendered: series counters, share texts, and the page cache (the
+     * cached pages hold the old HTML). posts:recompile and the last batch of the admin panel.
+     */
+    public static function finishRecompile(): void
+    {
+        self::finishSeries();
+        self::refreshShareText();   // follows the refreshed descriptions
+        require_once CORE_PATH . '/CacheManager.php';
+        CacheManager::purgeAll();
+    }
+
+    /** Each series keeps the sum of its posts' char_count, which a recompile may have changed. */
+    private static function finishSeries(): void
+    {
+        require_once CORE_PATH . '/Counters.php';
+        require_once CORE_PATH . '/SeriesCompiler.php';
+        Counters::rebuildSeries();
+        SeriesCompiler::compile();
     }
 
     /**

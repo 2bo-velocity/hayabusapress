@@ -10,6 +10,11 @@
 
 <div class="space-y-3 max-w-2xl">
 
+    <a href="/{{ $adminPath }}/maintenance/upgrade" class="block bg-white dark:bg-slate-950 border border-emerald-200 dark:border-emerald-800 rounded-2xl p-5 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors">
+        <span class="text-sm font-medium">{@ upg_title @} →</span>
+        <span class="block text-xs text-slate-500 mt-1">{@ upg_link_desc @}</span>
+    </a>
+
     <div class="bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-5 flex items-center justify-between gap-4">
         <span class="text-sm font-medium">{@ maintenance_sitemap @}</span>
         <form method="post" action="/{{ $adminPath }}/maintenance/run">

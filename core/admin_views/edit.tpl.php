@@ -527,6 +527,10 @@ function switchTab(tab) {
         if (f.elements['show_toc'] && f.elements['show_toc'].checked) fd.append('show_toc', '1');
         if (f.elements['is_sponsored'] && f.elements['is_sponsored'].checked) fd.append('is_sponsored', '1');
         if (f.elements['lang']) fd.append('lang', f.elements['lang'].value);
+        // Plugins' content_render filters see the post as the save will
+        if (f.elements['id']) fd.append('post_id', f.elements['id'].value);
+        var typeRadio = f.querySelector('input[name="type"]:checked');
+        if (typeRadio) fd.append('type', typeRadio.value);
         fetch('/' + adminPath + '/preview', { method: 'POST', body: fd })
             .then(function(r) { return r.json(); })
             .then(function(d) { preview.innerHTML = d.success ? d.html : (msgError + ': ' + (d.message || '')); })

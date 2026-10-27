@@ -44,6 +44,16 @@ match ($command) {
     'system:init'      => cmd_init(),
     'plugins:rebuild'  => cmd_plugins_rebuild(),
     'plugins:checksums' => cmd_plugins_checksums($arg),
+    'plugins:status'   => cmd_plugins_status(),
+    'plugins:apply'    => cmd_plugins_apply($arg, array_slice($argv, 3)),
+    'plugins:rollback' => cmd_plugins_rollback($arg, array_slice($argv, 3)),
+    'plugins:repair'   => cmd_plugins_repair($arg),
+    'plugins:ack'      => cmd_plugins_ack($arg),
+    'plugins:scan'     => cmd_plugins_scan($arg),
+    'themes:rollback'  => cmd_themes_rollback($arg, array_slice($argv, 3)),
+    'themes:repair'    => cmd_themes_repair($arg),
+    'system:verify'    => cmd_system_verify(array_slice($argv, 2)),
+    'release:files'    => cmd_release_files(array_slice($argv, 2)),
     'lang:rebuild'     => cmd_lang_rebuild($arg),
     'lang:check'       => cmd_lang_check(implode(' ', array_slice($argv, 2))),
     'lang:publish'     => cmd_lang_publish($arg),
@@ -112,6 +122,17 @@ Usage:
   # Cache / build
   php core/cli.php system:init                   Regenerate all caches
   php core/cli.php plugins:rebuild               Recompile plugin registry + hook map
+  php core/cli.php plugins:apply {id} [--yes] [--accept=author,signer,version]
+                                                 Review plugins/_incoming/{id}/ and apply it (the running version is kept as a backup)
+  php core/cli.php plugins:rollback {id} [--yes] Go back to the kept previous version (the database is not rolled back)
+  php core/cli.php plugins:repair {id}           Finish or undo a plugin operation that was interrupted
+  php core/cli.php themes:rollback {name} [--yes] Go back to the kept previous version of a theme
+  php core/cli.php themes:repair {name}          Finish or undo a theme operation that was interrupted
+  php core/cli.php plugins:scan {dir|id}         What a plugin's code does (a guide for reviewing it, not a malware scan)
+  php core/cli.php plugins:ack {id}              Accept the current files of a plugin that changed outside the admin panel
+  php core/cli.php system:verify [--ack]         Check plugins and core files for changes made outside the admin panel
+                                                 (--ack accepts every current difference)
+  php core/cli.php plugins:status                Plugins with their warnings and logged errors (as of the last rebuild)
   php core/cli.php plugins:checksums {dir|id}    Write the SHA-256 of every file into manifest.json "files"
                                                  (sign manifest.json afterwards; see REQUIRE_SIGNED_PLUGINS)
   php core/cli.php lang:rebuild [locale]         Cleanse per-locale view cache
@@ -276,6 +297,7 @@ function cmd_init(): void
         echo "  Scheduler              [OK]\n";
     }
 
+    cli_verify_and_report();
     echo "\nsystem:init complete.\n";
 }
 
@@ -296,7 +318,391 @@ function cmd_plugins_rebuild(): void
     RouterCompiler::compile();
     echo "  routes.cache.php                     [OK]\n";
 
+    cli_verify_and_report();
+
     echo "\nplugins:rebuild complete.\n";
+}
+
+/** Check for changed files after a rebuild and say what was found (details: system:verify). */
+function cli_verify_and_report(): void
+{
+    cli_plugin_installer();
+    require_once CORE_PATH . '/Integrity.php';
+    Integrity::run(true);
+    foreach (Integrity::notices() as $n) {
+        echo "  ! {$n}\n";
+    }
+}
+
+/**
+ * What changed outside the admin panel: plugin files against their record, core files against
+ * core/release.files.php. Exit 1 when something differs, so it can run from cron or CI.
+ */
+function cmd_system_verify(array $opts): void
+{
+    cli_plugin_installer();
+    require_once CORE_PATH . '/Integrity.php';
+    if (in_array('--ack', $opts, true)) {
+        Integrity::run(false);
+        foreach (array_keys(Integrity::state()['plugins'] ?? []) as $id) {
+            try {
+                Integrity::ackPlugin((string)$id);
+            } catch (RuntimeException $e) {
+                echo "Not accepted: {$id}: {$e->getMessage()}\n";
+            }
+        }
+        Integrity::ackCore();
+        echo "Every current difference was accepted.\n";
+    }
+    $s = Integrity::run(!in_array('--ack', $opts, true));
+    $found = false;
+    foreach ($s['plugins'] as $id => $p) {
+        $found = true;
+        echo "plugin {$id}" . ($p['no_record'] ? ' (no record)' : '') . ($p['disabled'] ? " -- stopped ({$p['disabled']})" : '') . "\n";
+        foreach (['added' => '+', 'removed' => '-', 'changed' => '~'] as $k => $mark) {
+            foreach ($p['diff'][$k] as $f) {
+                echo "    {$mark} {$f}\n";
+            }
+        }
+        foreach ($p['syntax'] as $e) {
+            echo "    syntax error: {$e['file']}:{$e['line']} {$e['message']}\n";
+        }
+    }
+    $c = $s['core'];
+    if ($c['list'] !== 'ok') {
+        $found = true;
+        echo "core: core/release.files.php is {$c['list']}; core files were not checked\n";
+    }
+    foreach (['changed' => '~', 'missing' => '-', 'unknown' => '?'] as $k => $mark) {
+        foreach ($c[$k] as $f) {
+            $found = true;
+            echo "core {$mark} {$f}\n";
+        }
+    }
+    foreach (Integrity::notices() as $n) {
+        echo "! {$n}\n";
+    }
+    if (!$found && $s['error'] === null) {
+        echo "No changes outside the admin panel" . ($c['version'] !== '' ? " (release {$c['version']})" : '') . ".\n";
+    }
+    exit($found || $s['error'] !== null ? 1 : 0);
+}
+
+/**
+ * What a plugin's code does: running code or commands, run-time calls and includes, signs of
+ * obfuscation, global state, network, file writes, outside scripts. For plugin authors before
+ * publishing, and for anyone reviewing a plugin. Not a malware scan: code can always hide from it.
+ */
+function cmd_plugins_scan(string $target): void
+{
+    if ($target === '') {
+        echo "Usage: php core/cli.php plugins:scan {dir|id}\n";
+        exit(1);
+    }
+    $dir = is_dir($target) ? rtrim($target, '/') : ROOT_PATH . '/plugins/' . $target;
+    if (!is_dir($dir)) {
+        echo "Error: no such plugin or directory: {$target}\n";
+        exit(1);
+    }
+    require_once CORE_PATH . '/PluginScanner.php';
+    require_once CORE_PATH . '/PluginInstaller.php';
+    $manifest = json_decode((string)@file_get_contents($dir . '/manifest.json'), true);
+    foreach (PluginInstaller::syntaxErrors($dir) as $e) {
+        echo "error    syntax      {$e['file']}:{$e['line']} {$e['message']}\n";
+    }
+    $findings = PluginScanner::scan($dir, is_array($manifest) ? $manifest : null);
+    foreach ($findings as $f) {
+        printf("%-8s %-16s %s:%d %s\n", $f['level'], $f['rule'], $f['file'], $f['line'], $f['detail']);
+    }
+    echo count($findings) === 0 ? "Nothing to point out.\n" : count($findings) . " finding(s). This lists what the code does; it does not prove the code safe or unsafe.\n";
+}
+
+function cli_theme_installer(): void
+{
+    foreach (['Audit', 'ThemeManager', 'ThemeInstaller'] as $f) {
+        require_once CORE_PATH . "/{$f}.php";
+    }
+}
+
+function cmd_themes_rollback(string $name, array $opts): void
+{
+    cli_theme_installer();
+    $backup = $name !== '' ? ThemeInstaller::backup($name) : null;
+    if ($backup === null) {
+        echo "Error: there is no previous version of '{$name}' to go back to.\n";
+        exit(1);
+    }
+    if (!in_array('--yes', $opts, true) && !cli_confirm("Go back to {$name} {$backup['version']} (kept {$backup['backed_up_at']})?")) {
+        exit(1);
+    }
+    try {
+        ThemeInstaller::rollback($name);
+    } catch (RuntimeException $e) {
+        echo "Error: {$e->getMessage()}\n";
+        exit(1);
+    }
+    echo "Went back to {$name} {$backup['version']}.\n";
+}
+
+function cmd_themes_repair(string $name): void
+{
+    cli_theme_installer();
+    $pending = ThemeInstaller::interrupted();
+    if ($name === '') {
+        echo $pending === [] ? "No interrupted theme operation.\n" : "Interrupted: " . implode(', ', array_keys($pending)) . "\nRun: php core/cli.php themes:repair {name}\n";
+        exit($pending === [] ? 0 : 1);
+    }
+    try {
+        echo ThemeInstaller::repair($name) . "\n";
+    } catch (RuntimeException $e) {
+        echo "Error: {$e->getMessage()}\n";
+        exit(1);
+    }
+}
+
+function cmd_plugins_ack(string $id): void
+{
+    cli_plugin_installer();
+    require_once CORE_PATH . '/Integrity.php';
+    if ($id === '' || !in_array($id, PluginManager::activeIds(), true)) {
+        echo "Error: '{$id}' is not an active plugin.\n";
+        exit(1);
+    }
+    try {
+        Integrity::ackPlugin($id);
+    } catch (RuntimeException $e) {
+        echo "Error: {$e->getMessage()}\n";
+        exit(1);
+    }
+    echo "Accepted the current files of {$id}.\n";
+}
+
+/**
+ * Write core/release.files.php: the SHA-256 of every distributed file, which system:verify and the
+ * admin panel compare the installed files with. Run by scripts/publish.sh for each release.
+ *   --list=FILE   distributed paths, one per line, relative to --root (required)
+ *   --root=DIR    the package (default: this installation)
+ *   --out=FILE    where to write (default: {root}/core/release.files.php)
+ *   --version=V   what to call the release
+ * storage/ is left out: its shipped files (active.php, ...) change at run time.
+ */
+function cmd_release_files(array $opts): void
+{
+    $o = [];
+    foreach ($opts as $opt) {
+        if (preg_match('/^--(list|root|out|version)=(.*)$/', $opt, $m)) {
+            $o[$m[1]] = $m[2];
+        }
+    }
+    $root = rtrim($o['root'] ?? ROOT_PATH, '/');
+    $out  = $o['out'] ?? $root . '/core/release.files.php';
+    if (empty($o['list']) || !is_file($o['list'])) {
+        echo "Usage: php core/cli.php release:files --list=FILE [--root=DIR] [--out=FILE] [--version=V]\n";
+        exit(1);
+    }
+    $files = [];
+    foreach (file($o['list'], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $rel) {
+        if (str_starts_with($rel, 'storage/') || $rel === 'core/release.files.php') {
+            continue;
+        }
+        if (!is_file($root . '/' . $rel)) {
+            echo "Error: listed but missing: {$rel}\n";
+            exit(1);
+        }
+        $files[$rel] = hash_file('sha256', $root . '/' . $rel);
+    }
+    ksort($files, SORT_STRING);
+    $php = "<?php\n// HayabusaPress release file list - generated by scripts/publish.sh (php core/cli.php release:files). Do not edit.\n"
+         . 'return ' . var_export(['version' => (string)($o['version'] ?? ''), 'files' => $files], true) . ";\n";
+    if (file_put_contents($out, $php) === false) {
+        echo "Error: could not write {$out}\n";
+        exit(1);
+    }
+    echo count($files) . " file(s) listed in {$out}\n";
+}
+
+/** Load what the plugin installation commands need (the CLI does not run bootstrap.php). */
+function cli_plugin_installer(): void
+{
+    foreach (['Audit', 'PluginManager', 'PluginInstaller', 'RouterCompiler', 'SecurityHeaderCompiler'] as $f) {
+        require_once CORE_PATH . "/{$f}.php";
+    }
+}
+
+function cli_confirm(string $question): bool
+{
+    echo $question . ' [y/N] ';
+    return strtolower(trim((string)fgets(STDIN))) === 'y';
+}
+
+/**
+ * The same review as the plugins screen, in the terminal, then apply. With SSH the .env switch and
+ * the password confirmation do not apply: whoever runs this already has the server.
+ */
+function cmd_plugins_apply(string $id, array $opts): void
+{
+    if ($id === '') {
+        echo "Usage: php core/cli.php plugins:apply {id} [--yes] [--accept=author,signer,version]\n";
+        echo "Put the plugin's folder in plugins/_incoming/{id}/ first.\n";
+        exit(1);
+    }
+    cli_plugin_installer();
+    $yes    = in_array('--yes', $opts, true);
+    $accept = [];
+    foreach ($opts as $o) {
+        if (str_starts_with($o, '--accept=')) {
+            $accept = array_filter(explode(',', substr($o, 9)));
+        }
+    }
+
+    try {
+        $token = PluginInstaller::stageIncoming($id);
+    } catch (RuntimeException $e) {
+        echo "Error: {$e->getMessage()}\n";
+        exit(1);
+    }
+    $r = PluginInstaller::review($token);
+
+    echo "\n  {$r['name']} ({$r['id']})\n";
+    echo '  version   : ' . ($r['current'] ? $r['current']['version'] . ' -> ' : '(new) ') . $r['version'] . "\n";
+    echo '  author    : ' . ($r['current'] && $r['current']['author'] !== $r['author'] ? $r['current']['author'] . ' -> ' : '') . $r['author'] . "\n";
+    echo "  signature : {$r['signature']['state']}" . ($r['signature']['key'] !== '' ? " ({$r['signature']['key']}...)" : '') . "\n";
+    foreach (['added' => '+', 'removed' => '-'] as $k => $mark) {
+        foreach ($r['manifest_diff'][$k] as $line) {
+            echo "  {$mark} {$line}\n";
+        }
+    }
+    $fd = $r['file_diff'];
+    echo '  files     : +' . count($fd['added']) . ' -' . count($fd['removed']) . ' ~' . count($fd['changed']) . "\n";
+    foreach (['added' => '+', 'removed' => '-', 'changed' => '~'] as $k => $mark) {
+        foreach ($fd[$k] as $f) {
+            echo "      {$mark} {$f}\n";
+        }
+    }
+
+    $warnings = array_filter($r['scan'], static fn($f) => $f['level'] === 'warning');
+    $newOnes  = array_filter($warnings, static fn($f) => !empty($f['new']));
+    echo '  scan      : ' . count($warnings) . ' warning(s), ' . count($newOnes) . ' new since the installed version'
+        . ', ' . (count($r['scan']) - count($warnings)) . " info (all: plugins:scan)\n";
+    foreach ($newOnes as $f) {
+        echo "      ! {$f['rule']} {$f['file']}:{$f['line']} {$f['detail']}\n";
+    }
+
+    if ($r['syntax_errors'] !== []) {
+        echo "\n  PHP syntax errors: this version cannot be applied.\n";
+        foreach ($r['syntax_errors'] as $e) {
+            echo "    {$e['file']}:{$e['line']} {$e['message']}\n";
+        }
+        PluginInstaller::discard($token);
+        exit(1);
+    }
+
+    $consents = [];
+    $words = [
+        'author'  => 'The author differs from the installed version.',
+        'signer'  => 'The installed version was signed with a trusted key; this one is not signed with the same key.',
+        'version' => 'This version is not newer than the installed one.',
+    ];
+    foreach ($r['requires'] as $need) {
+        echo "\n  ! {$words[$need]}\n";
+        if (in_array($need, $accept, true) || (!$yes && cli_confirm('    Accept?'))) {
+            $consents[] = $need;
+        } else {
+            echo "  Not applied. Accept it with --accept={$need}.\n";
+            PluginInstaller::discard($token);
+            exit(1);
+        }
+    }
+    if (!$yes && !cli_confirm("\n  Apply this version?")) {
+        PluginInstaller::discard($token);
+        echo "  Not applied.\n";
+        exit(1);
+    }
+
+    try {
+        PluginInstaller::apply($token, $consents);
+    } catch (RuntimeException $e) {
+        echo "Error: {$e->getMessage()}\n";
+        exit(1);
+    }
+    echo "  Applied {$r['id']} {$r['version']}." . ($r['current'] ? " The previous version is kept (plugins:rollback {$r['id']})." : '') . "\n";
+    if (!empty($r['content_render']) || PluginManager::declaresContentRender($r['id'])) {
+        echo "  The plugin filters post bodies (content_render): run php core/cli.php posts:recompile to apply it to stored posts.\n";
+    }
+}
+
+function cmd_plugins_rollback(string $id, array $opts): void
+{
+    cli_plugin_installer();
+    $backup = $id !== '' ? PluginInstaller::backup($id) : null;
+    if ($backup === null) {
+        echo "Error: there is no previous version of '{$id}' to go back to.\n";
+        exit(1);
+    }
+    if (!in_array('--yes', $opts, true) && !cli_confirm("Go back to {$id} {$backup['version']} (kept {$backup['backed_up_at']})? The database is not rolled back.")) {
+        exit(1);
+    }
+    try {
+        PluginInstaller::rollback($id);
+    } catch (RuntimeException $e) {
+        echo "Error: {$e->getMessage()}\n";
+        exit(1);
+    }
+    echo "Went back to {$id} {$backup['version']}.\n";
+}
+
+function cmd_plugins_repair(string $id): void
+{
+    cli_plugin_installer();
+    $pending = PluginInstaller::interrupted();
+    if ($id === '') {
+        echo $pending === [] ? "No interrupted plugin operation.\n" : "Interrupted: " . implode(', ', array_keys($pending)) . "\nRun: php core/cli.php plugins:repair {id}\n";
+        exit($pending === [] ? 0 : 1);
+    }
+    try {
+        echo PluginInstaller::repair($id) . "\n";
+    } catch (RuntimeException $e) {
+        echo "Error: {$e->getMessage()}\n";
+        exit(1);
+    }
+}
+
+/**
+ * What the plugins screen shows, for a terminal: each plugin, what the last rebuild skipped over,
+ * and the errors it raised at run time (storage/logs/plugin-errors.log). Reads only; run
+ * plugins:rebuild first for current warnings.
+ */
+function cmd_plugins_status(): void
+{
+    require_once CORE_PATH . '/PluginManager.php';
+    require_once CORE_PATH . '/PluginErrors.php';
+    $plugins = PluginManager::scan();
+    $state   = PluginManager::state();
+    $errors  = PluginErrors::summary();
+    require_once CORE_PATH . '/Integrity.php';
+    $changed = Integrity::state()['plugins'] ?? [];
+
+    foreach ($plugins as $dir => $p) {
+        printf("%-28s %-10s %s\n", $dir, 'v' . $p['version'], $p['active'] ? 'active' : 'inactive');
+        foreach ($state[$dir]['warnings'] ?? [] as [$key, $params]) {
+            echo '    warning: ' . HbpLocale::t($key, $key, $params) . "\n";
+        }
+        if (isset($changed[$dir])) {
+            $d = $changed[$dir]['diff'];
+            echo '    changed outside the admin panel since ' . $changed[$dir]['since'] . ': +' . count($d['added']) . ' -' . count($d['removed']) . ' ~' . count($d['changed'])
+                . ($changed[$dir]['disabled'] ? " -- stopped ({$changed[$dir]['disabled']})" : '') . " (details: system:verify)\n";
+        }
+        if (isset($errors[$dir])) {
+            $e = $errors[$dir];
+            echo "    errors: {$e['count']} (last {$e['last_at']}, {$e['last_where']}): {$e['last_message']}\n";
+        }
+    }
+    foreach (array_diff_key($state, $plugins) as $dir => $st) {
+        printf("%-28s %s\n", $dir, 'unreadable');
+        foreach ($st['warnings'] ?? [] as [$key, $params]) {
+            echo '    warning: ' . HbpLocale::t($key, $key, $params) . "\n";
+        }
+    }
 }
 
 /**
@@ -493,7 +899,20 @@ function cmd_db_migrate(): void
 {
     echo "Checking migration status...\n";
     Migrator::ensureMigrationsTable();
-    $count = Migrator::migrate();
+    try {
+        $count = Migrator::migrate();
+    } catch (MigrationFailed $e) {
+        echo "\n  Error: {$e->getMessage()}\n";
+        echo "  Statement:\n    " . str_replace("\n", "\n    ", trim($e->statement)) . "\n\n";
+        echo $e->rolledBack
+            ? "  {$e->version} was rolled back and not recorded: the database is as it was before it.\n"
+            : "  {$e->version} was not recorded. Statements before #{$e->statementNo} stay applied (MySQL commits each one).\n";
+        echo "  Fix the cause and run db:migrate again; it resumes from {$e->version}.\n";
+        exit(1);
+    } catch (RuntimeException $e) {
+        echo "Error: {$e->getMessage()}\n";
+        exit(1);
+    }
     if ($count === 0) {
         echo "No migrations to apply (already up to date).\n";
     } else {
@@ -660,14 +1079,18 @@ function cmd_posts_recompile(array $args = []): void
     // Every post (not only the reassessed ones): this command is also how sanitizer and
     // SPONSORED_NOTICE_TEXT changes reach stored HTML.
     echo "Recompiling all posts (re-render Markdown + apply HtmlSanitizer)...\n";
-    $count = PostCompiler::recompile();
-    PostCompiler::refreshShareText();   // follows the refreshed descriptions
-
-    // Purge all FPC (re-sanitization may change the content)
-    CacheManager::purgeAll();
+    $failed = [];
+    $count  = PostCompiler::recompile(null, false, $failed);
+    PostCompiler::finishRecompile();   // series counters, share texts, and every cached page
 
     echo "Recompiled {$count} post(s).\n";
+    foreach ($failed as $id => $message) {
+        echo "  Failed: post {$id}: {$message}\n";
+    }
     echo "Cleared all FPC (regenerated on next access via Auto-Healing).\n";
+    if ($failed !== []) {
+        exit(1);
+    }
 }
 
 function cmd_authors_rebuild(): void

@@ -199,9 +199,24 @@ tailwind.config = { darkMode: 'class' };
         {% if $schemaDrift %}
         <div class="mb-4 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
             <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z"/></svg>
-            <span>{{ $schemaDrift }}</span>
+            <span>{{ $schemaDrift }} <a href="/{{ $adminPath }}/maintenance/upgrade" class="underline font-medium">{@ upg_title @}</a></span>
         </div>
         {% endif %}
+        {% if $integrityNotices %}
+        <div class="mb-4 flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-950/40 px-4 py-3 text-sm text-rose-800 dark:text-rose-200">
+            <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+            <span>
+                {% foreach $integrityNotices as $integrityNotice %}{{ $integrityNotice }}<br>{% endforeach %}
+                <a href="/{{ $adminPath }}/integrity" class="underline font-medium">{@ integrity_details @}</a>
+            </span>
+        </div>
+        {% endif %}
+        {% foreach $gateNotices as $gateNotice %}
+        <div class="mb-4 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+            <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>
+            <span>{{ $gateNotice }}</span>
+        </div>
+        {% endforeach %}
         {% if $dbEncoding %}
         <div class="mb-4 flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-950/40 px-4 py-3 text-sm text-rose-800 dark:text-rose-200">
             <svg class="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4a2 2 0 00-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z"/></svg>

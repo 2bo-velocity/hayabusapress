@@ -199,10 +199,16 @@ if ($subPath === '/upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($subPath === '/preview' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $markdown     = (string)($_POST['content_markdown'] ?? '');
     $allowRawHtml = Auth::isSuperUser() || (class_exists('Gate') && Gate::can('post:raw_html'));
-    $html         = MarkdownCompiler::render($markdown, $allowRawHtml, [
-        'toc'       => !empty($_POST['show_toc']),
-        'sponsored' => !empty($_POST['is_sponsored']),
-        'lang'      => (string)($_POST['lang'] ?? ''),
+    require_once CORE_PATH . '/PostCompiler.php';
+    // The same renderer as the save (plugins' content_render filters included), so the preview matches
+    $html         = PostCompiler::render([
+        'content_markdown' => $markdown,
+        'raw_html_allowed' => $allowRawHtml,
+        'show_toc'         => !empty($_POST['show_toc']),
+        'is_sponsored'     => !empty($_POST['is_sponsored']),
+        'lang'             => (string)($_POST['lang'] ?? ''),
+        'id'               => (int)($_POST['post_id'] ?? 0),
+        'type'             => ($_POST['type'] ?? '') === 'page' ? 'page' : 'post',
     ]);
     // Show reusable blocks in place, as the public page will (the marker itself renders as nothing)
     if (str_contains($html, '<!--hbp:block:')) {
@@ -316,6 +322,10 @@ $commonData = [
     'schemaDrift' => Migrator::schemaDriftWarning(),
     // DB charset check: warn at startup about non-UTF8 (especially a non-UTF8 pgsql DB) (null on match)
     'dbEncoding'  => DB::encodingWarning(),
+    // Time-limited switches that are open (or written wrong): shown on every page so none is forgotten
+    'gateNotices' => adminGateNotices(),
+    // Files changed outside the admin panel (the last check; core/Integrity.php)
+    'integrityNotices' => (static function (): array { require_once CORE_PATH . '/Integrity.php'; return Integrity::notices(); })(),
 ];
 
 // ============================================================
@@ -403,16 +413,33 @@ match (true) {
 
     // --- Plugin management ---
     $subPath === '/plugins' => handleAdminPlugins($commonData),
+    $subPath === '/reauth' && isPost() => handleAdminReauth($adminPath),
     $subPath === '/plugin/toggle' && isPost() => handleAdminPluginToggle($adminPath),
     $subPath === '/plugin/install' && isPost() => handleAdminPluginInstall($adminPath),
     $subPath === '/plugin/rebuild' && isPost() => handleAdminPluginRebuild($adminPath),
     $subPath === '/plugin/delete' && isPost() => handleAdminPluginDelete($adminPath),
+    $subPath === '/plugins/review' => handleAdminPluginReview($commonData),
+    $subPath === '/plugin/stage-incoming' && isPost() => handleAdminPluginStageIncoming($adminPath),
+    $subPath === '/plugin/apply' && isPost() => handleAdminPluginApply($adminPath),
+    $subPath === '/plugin/discard' && isPost() => handleAdminPluginDiscard($adminPath),
+    $subPath === '/plugin/rollback' && isPost() => handleAdminPluginRollback($adminPath),
+    $subPath === '/plugin/repair' && isPost() => handleAdminPluginRepair($adminPath),
+    $subPath === '/integrity' => handleAdminIntegrity($commonData),
+    $subPath === '/integrity/check' && isPost() => handleAdminIntegrityCheck($adminPath),
+    $subPath === '/integrity/ack-plugin' && isPost() => handleAdminIntegrityAckPlugin($adminPath),
+    $subPath === '/integrity/ack-core' && isPost() => handleAdminIntegrityAckCore($adminPath),
+    $subPath === '/plugin/errors/clear' && isPost() => handleAdminPluginErrorsClear($adminPath),
 
     // --- Front theme management ---
     $subPath === '/themes' => handleAdminThemes($commonData),
     $subPath === '/theme/activate' && isPost() => handleAdminThemeActivate($adminPath),
     $subPath === '/theme/install' && isPost() => handleAdminThemeInstall($adminPath),
     $subPath === '/theme/delete' && isPost() => handleAdminThemeDelete($adminPath),
+    $subPath === '/themes/review' => handleAdminThemeReview($commonData),
+    $subPath === '/theme/apply' && isPost() => handleAdminThemeApply($adminPath),
+    $subPath === '/theme/discard' && isPost() => handleAdminThemeDiscard($adminPath),
+    $subPath === '/theme/rollback' && isPost() => handleAdminThemeRollback($adminPath),
+    $subPath === '/theme/repair' && isPost() => handleAdminThemeRepair($adminPath),
     $subPath === '/theme/rebuild' && isPost() => handleAdminThemeRebuild($adminPath),
 
     // --- NG-keyword management ---
@@ -428,6 +455,10 @@ match (true) {
     // --- Maintenance (regeneration; SSH-free operation) ---
     $subPath === '/maintenance' => handleAdminMaintenance($commonData),
     $subPath === '/maintenance/run' && isPost() => handleAdminMaintenanceRun($adminPath),
+    $subPath === '/maintenance/upgrade' => handleAdminUpgrade($commonData),
+    $subPath === '/maintenance/opcache' && isPost() => handleAdminOpcacheReset($adminPath),
+    $subPath === '/maintenance/migrate' && isPost() => handleAdminMigrate($adminPath),
+    $subPath === '/maintenance/recompile' && isPost() => handleAdminRecompileBatch(),
 
     // --- Cache ---
     $subPath === '/cache/clear' && isPost() => handleAdminCacheClear($adminPath),
@@ -443,6 +474,124 @@ match (true) {
 // ============================================================
 
 function isPost(): bool { return $_SERVER['REQUEST_METHOD'] === 'POST'; }
+
+/**
+ * The switches in .env that let the admin panel change code or the schema (Env::gate()), with the
+ * words the screens use for them. Plugin and theme installation also accept a legacy true.
+ *
+ * @return array<string,array{what:string,legacy:bool}>
+ */
+function adminGates(): array
+{
+    return [
+        'ALLOW_PLUGIN_INSTALL' => ['what' => HbpLocale::t('gate_what_plugin', 'Installing plugins'), 'legacy' => true],
+        'ALLOW_THEME_INSTALL'  => ['what' => HbpLocale::t('gate_what_theme', 'Installing themes'), 'legacy' => true],
+        'WEB_UPGRADE_UNTIL'    => ['what' => HbpLocale::t('gate_what_upgrade', 'Upgrading the database'), 'legacy' => false],
+    ];
+}
+
+/** Banner lines for every switch that is open, open with no time limit, or written wrong. */
+function adminGateNotices(): array
+{
+    $notices = [];
+    foreach (adminGates() as $key => $def) {
+        $gate = Env::gate($key, $def['legacy']);
+        $text = adminGateReason($key, $gate) ?? match ($gate['reason']) {
+            'open'   => HbpLocale::t('gate_banner_open', ':what from the admin panel is allowed until :until (:key in .env).',
+                ['what' => $def['what'], 'until' => Env::gateTime((int)$gate['until']), 'key' => $key]),
+            'legacy' => HbpLocale::t('gate_banner_legacy', ':what from the admin panel is allowed with no time limit (:key=true in .env). Write a date and time instead, for example :line',
+                ['what' => $def['what'], 'key' => $key, 'line' => Env::gateSuggestion($key)]),
+            default  => null,
+        };
+        if ($text !== null) {
+            $notices[] = $text;
+        }
+    }
+    return $notices;
+}
+
+/** Why a switch that has a value is ignored, or null when there is nothing wrong with it. */
+function adminGateReason(string $key, array $gate): ?string
+{
+    return match ($gate['reason']) {
+        'too_far' => HbpLocale::t('gate_reason_too_far', 'The date in :key is more than 24 hours ahead, so it is ignored.', ['key' => $key]),
+        'invalid' => HbpLocale::t('gate_reason_invalid', 'The value of :key cannot be read, so it is ignored. Write it as YYYY-MM-DD HH:MM.', ['key' => $key]),
+        default   => null,
+    };
+}
+
+/**
+ * What a screen with an install form needs to know about its switch: whether it is open, and when
+ * it is not, the sentence and the .env line that would open it for an hour.
+ */
+function adminGateView(string $key): array
+{
+    $def  = adminGates()[$key];
+    $gate = Env::gate($key, $def['legacy']);
+    return [
+        'open'   => $gate['open'],
+        'closed' => HbpLocale::t('gate_closed', ':what from the admin panel is turned off.', ['what' => $def['what']]),
+        'reason' => adminGateReason($key, $gate),
+        'line'   => Env::gateSuggestion($key),
+    ];
+}
+
+/** What the password-confirmation panel shows (core/admin_views/_reauth.tpl.php). */
+function adminReauthView(string $back): array
+{
+    $remaining = Auth::reauthRemaining();
+    return [
+        'reauthOk'     => $remaining > 0,
+        'reauthStatus' => $remaining > 0
+            ? HbpLocale::t('reauth_confirmed', 'Password confirmed. Installing and deleting are allowed for :minutes more minute(s).',
+                ['minutes' => (int)ceil($remaining / 60)])
+            : '',
+        'reauthCode'   => $remaining > 0 ? false : Auth::reauthNeedsCode(),
+        'reauthBack'   => $back,
+    ];
+}
+
+/**
+ * Operations that change code (installing or deleting a plugin or theme) need a password confirmed
+ * within Auth::REAUTH_TTL: a stolen session alone must not be enough. Checked on the server, since
+ * hiding a button does not stop a POST.
+ */
+function requireReauth(string $adminPath, string $back, string $channel, string $action): void
+{
+    if (Auth::reauthValid()) {
+        return;
+    }
+    Audit::log($channel, 'refused', ['action' => $action, 'reason' => 'reauth_required']);
+    adminRedirect($adminPath, $back, ['error' => HbpLocale::t('err_reauth_required', 'Confirm your password first, in the panel at the top of this page.')]);
+}
+
+/** Redirect to a screen of this admin panel ($back may already carry a query) and stop. */
+function adminRedirect(string $adminPath, string $back, array $query = []): void
+{
+    $url = '/' . $adminPath . $back;
+    if ($query !== []) {
+        $url .= (str_contains($back, '?') ? '&' : '?') . http_build_query($query);
+    }
+    header('Location: ' . $url);
+    exit;
+}
+
+/** A return path posted by a form: a screen of this admin panel only (no open redirect). */
+function adminBackPath(mixed $back): string
+{
+    return is_string($back) && preg_match('#^/[a-z0-9/_-]*(\?token=[a-f0-9]{16})?$#', $back) ? $back : '/';
+}
+
+function handleAdminReauth(string $adminPath): void
+{
+    $back     = adminBackPath($_POST['back'] ?? null);
+    $password = is_string($_POST['reauth_password'] ?? null) ? $_POST['reauth_password'] : '';
+    $code     = is_string($_POST['reauth_code'] ?? null) ? trim($_POST['reauth_code']) : '';
+
+    $error = Auth::reauthenticate($password, $code);
+    Audit::log('admin', $error === null ? 'reauth_ok' : 'reauth_failed');
+    adminRedirect($adminPath, $back, $error === null ? ['reauth' => '1'] : ['error' => $error]);
+}
 
 function handleAdminLogin(string $adminPath, string $siteName, string $subPath): void
 {
@@ -466,6 +615,8 @@ function handleAdminLogin(string $adminPath, string $siteName, string $subPath):
             }
             $code = trim($_POST['code'] ?? '');
             if (Auth::completeTwoFactor($code)) {
+                require_once CORE_PATH . '/Integrity.php';
+                Integrity::afterResponse();   // check for changed files once the response is sent
                 header('Location: /' . $adminPath);
                 exit;
             }
@@ -520,6 +671,8 @@ function handleAdminLogin(string $adminPath, string $siteName, string $subPath):
             $result = Auth::login($email, $password);
 
             if ($result === true) {
+                require_once CORE_PATH . '/Integrity.php';
+                Integrity::afterResponse();   // check for changed files once the response is sent
                 header('Location: /' . $adminPath);
                 exit;
             } elseif ($result === '2fa') {
@@ -1765,8 +1918,40 @@ function handleAdmin2faDisable(string $adminPath): void
 function handleAdminPlugins(array $common): void
 {
     Gate::authorize('plugin:manage');
-    $plugins = PluginManager::scan();
-    View::render('admin/plugins', array_merge($common, compact('plugins')));
+    $plugins     = PluginManager::scan();
+    $installGate = adminGateView('ALLOW_PLUGIN_INSTALL');
+
+    // What PHP's error log would say, for sites that cannot read it: problems the last rebuild
+    // skipped over (in the viewer's language) and errors plugins raised at run time.
+    $pluginWarnings = [];
+    foreach (PluginManager::state() as $dir => $st) {
+        foreach ($st['warnings'] ?? [] as [$key, $params]) {
+            $pluginWarnings[$dir][] = HbpLocale::t($key, $key, $params);
+        }
+    }
+    // Directories whose manifest could not be read never reach the list: show them on their own
+    $unreadablePlugins = array_diff_key($pluginWarnings, $plugins);
+    $pluginErrors      = PluginErrors::summary();
+    $auditRecent       = Audit::recent('plugin', 50);
+
+    require_once CORE_PATH . '/PluginInstaller.php';
+    PluginInstaller::cleanupExpired();
+    $incoming    = PluginInstaller::incoming();
+    $interrupted = PluginInstaller::interrupted();
+    $backups     = [];
+    foreach (array_keys($plugins) as $dir) {
+        if (($b = PluginInstaller::backup((string)$dir)) !== null) {
+            $backups[$dir] = $b;
+        }
+    }
+
+    require_once CORE_PATH . '/Integrity.php';
+    $changedPlugins = Integrity::state()['plugins'] ?? [];
+
+    View::render('admin/plugins', array_merge($common,
+        compact('plugins', 'installGate', 'pluginWarnings', 'unreadablePlugins', 'pluginErrors', 'auditRecent',
+            'incoming', 'interrupted', 'backups', 'changedPlugins'),
+        adminReauthView('/plugins')));
 }
 
 function handleAdminPluginToggle(string $adminPath): void
@@ -1774,9 +1959,24 @@ function handleAdminPluginToggle(string $adminPath): void
     Gate::authorize('plugin:manage');
     $name   = basename($_POST['name'] ?? '');
     $action = $_POST['action'] ?? '';
-    if ($action === 'activate')   PluginManager::activate($name);
-    if ($action === 'deactivate') PluginManager::deactivate($name);
-    header('Location: /' . $adminPath . '/plugins');
+    try {
+        if ($action === 'activate') {
+            PluginManager::activate($name);
+            Audit::log('plugin', 'activated', ['plugin' => $name]);
+        }
+        if ($action === 'deactivate') {
+            PluginManager::deactivate($name);
+            Audit::log('plugin', 'deactivated', ['plugin' => $name]);
+        }
+        // The plugin's routes enter (or leave) the route map only when it is recompiled: without
+        // this a newly activated plugin's URLs answered 404 until the next full rebuild
+        RouterCompiler::compile();
+        header('Location: /' . $adminPath . '/plugins' . (PluginManager::declaresContentRender($name) ? '?recompile=1' : ''));
+    } catch (RuntimeException $e) {
+        // The install SQL failed: the plugin stays inactive, and the screen says why
+        header('Location: /' . $adminPath . '/plugins?error=' . urlencode(
+            HbpLocale::t('err_plugin_not_activated', ':plugin was not activated.', ['plugin' => $name]) . ' ' . $e->getMessage()));
+    }
     exit;
 }
 
@@ -1784,29 +1984,123 @@ function handleAdminPluginInstall(string $adminPath): void
 {
     Gate::authorize('plugin:manage');
 
-    // fully disable web-based installation when ALLOW_PLUGIN_INSTALL=false
-    if (!Env::bool('ALLOW_PLUGIN_INSTALL', false)) {
-        header('Location: /' . $adminPath . '/plugins?error=disabled');
+    // Web-based installation only while ALLOW_PLUGIN_INSTALL is open (a date in .env, or true)
+    if (!Env::gate('ALLOW_PLUGIN_INSTALL', true)['open']) {
+        Audit::log('plugin', 'refused', ['action' => 'install', 'reason' => 'switch_closed']);
+        header('Location: /' . $adminPath . '/plugins?error='
+            . urlencode(adminGateView('ALLOW_PLUGIN_INSTALL')['closed']));
         exit;
     }
 
     if (!isset($_FILES['zip']) || $_FILES['zip']['error'] !== UPLOAD_ERR_OK) {
-        header('Location: /' . $adminPath . '/plugins?error=upload');
-        exit;
+        adminRedirect($adminPath, '/plugins', ['error' => HbpLocale::t('plugin_installed_fail', 'Installation failed.')]);
     }
 
-    // PluginInstaller performs zip-slip countermeasures, Ed25519 signature verification, and auditing
+    // Uploading only stages the ZIP (checked, copied to storage/, not run): it is applied from
+    // the review, which is where the password is asked for.
     require_once CORE_PATH . '/PluginInstaller.php';
     try {
-        $pluginId = PluginInstaller::install($_FILES['zip']['tmp_name']);
-        // Rebuild the registry after installation
-        PluginManager::rebuildCache();
-        RouterCompiler::compile();
-        header('Location: /' . $adminPath . '/plugins?installed=1');
+        $token = PluginInstaller::stageZip($_FILES['zip']['tmp_name']);
+        adminRedirect($adminPath, '/plugins/review?token=' . $token);
     } catch (RuntimeException $e) {
-        header('Location: /' . $adminPath . '/plugins?error=' . urlencode($e->getMessage()));
+        adminRedirect($adminPath, '/plugins', ['error' => $e->getMessage()]);
     }
-    exit;
+}
+
+/** Stage a folder put in plugins/_incoming/ over FTP or SSH. Only reads it: no switch needed. */
+function handleAdminPluginStageIncoming(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    require_once CORE_PATH . '/PluginInstaller.php';
+    try {
+        $token = PluginInstaller::stageIncoming(basename((string)($_POST['name'] ?? '')));
+        adminRedirect($adminPath, '/plugins/review?token=' . $token);
+    } catch (RuntimeException $e) {
+        adminRedirect($adminPath, '/plugins', ['error' => $e->getMessage()]);
+    }
+}
+
+function handleAdminPluginReview(array $common): void
+{
+    Gate::authorize('plugin:manage');
+    require_once CORE_PATH . '/PluginInstaller.php';
+    $token  = is_string($_GET['token'] ?? null) ? $_GET['token'] : '';
+    $review = PluginInstaller::review($token);
+    if ($review === null) {
+        adminRedirect($common['adminPath'], '/plugins', ['error' => HbpLocale::t('err_review_expired', 'This review has expired or was already used. Upload or stage it again.')]);
+    }
+    $installGate = adminGateView('ALLOW_PLUGIN_INSTALL');
+    $review['scan'] = adminScanLabels($review['scan'] ?? []);
+    View::render('admin/plugin_review', array_merge($common, compact('review', 'installGate'),
+        adminReauthView('/plugins/review?token=' . $review['token'])));
+}
+
+/** Apply a reviewed version: the switch must be open and the password confirmed. */
+function handleAdminPluginApply(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    $token = is_string($_POST['token'] ?? null) && preg_match('/^[a-f0-9]{16}$/', $_POST['token']) ? $_POST['token'] : '';
+    $back  = '/plugins/review?token=' . $token;
+    if (!Env::gate('ALLOW_PLUGIN_INSTALL', true)['open']) {
+        Audit::log('plugin', 'refused', ['action' => 'apply', 'reason' => 'switch_closed']);
+        adminRedirect($adminPath, $back, ['error' => adminGateView('ALLOW_PLUGIN_INSTALL')['closed']]);
+    }
+    requireReauth($adminPath, $back, 'plugin', 'apply');
+
+    require_once CORE_PATH . '/PluginInstaller.php';
+    $consents = array_values(array_intersect(PluginInstaller::CONSENTS, (array)($_POST['consent'] ?? [])));
+    try {
+        $review = PluginInstaller::review($token);
+        $id     = PluginInstaller::apply($token, $consents);
+        adminRedirect($adminPath, '/plugins', ['applied' => $id] + (!empty($review['content_render']) || PluginManager::declaresContentRender($id) ? ['recompile' => '1'] : []));
+    } catch (RuntimeException $e) {
+        adminRedirect($adminPath, PluginInstaller::review($token) !== null ? $back : '/plugins', ['error' => $e->getMessage()]);
+    }
+}
+
+function handleAdminPluginDiscard(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    require_once CORE_PATH . '/PluginInstaller.php';
+    PluginInstaller::discard(is_string($_POST['token'] ?? null) ? $_POST['token'] : '');
+    adminRedirect($adminPath, '/plugins');
+}
+
+/** Go back to the kept previous version: changes code, so the switch and the password apply. */
+function handleAdminPluginRollback(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    if (!Env::gate('ALLOW_PLUGIN_INSTALL', true)['open']) {
+        Audit::log('plugin', 'refused', ['action' => 'rollback', 'reason' => 'switch_closed']);
+        adminRedirect($adminPath, '/plugins', ['error' => adminGateView('ALLOW_PLUGIN_INSTALL')['closed']]);
+    }
+    requireReauth($adminPath, '/plugins', 'plugin', 'rollback');
+    require_once CORE_PATH . '/PluginInstaller.php';
+    try {
+        $name = basename((string)($_POST['name'] ?? ''));
+        PluginInstaller::rollback($name);
+        adminRedirect($adminPath, '/plugins', ['rolledback' => '1'] + (PluginManager::declaresContentRender($name) ? ['recompile' => '1'] : []));
+    } catch (RuntimeException $e) {
+        adminRedirect($adminPath, '/plugins', ['error' => $e->getMessage()]);
+    }
+}
+
+/**
+ * Finish or undo an operation that was cut short. It only puts back what the journal says was
+ * there before, so the switch is not required (a closed switch must not block a recovery), but the
+ * password is.
+ */
+function handleAdminPluginRepair(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    requireReauth($adminPath, '/plugins', 'plugin', 'repair');
+    require_once CORE_PATH . '/PluginInstaller.php';
+    try {
+        $message = PluginInstaller::repair(basename((string)($_POST['name'] ?? '')));
+        adminRedirect($adminPath, '/plugins', ['notice' => $message]);
+    } catch (RuntimeException $e) {
+        adminRedirect($adminPath, '/plugins', ['error' => $e->getMessage()]);
+    }
 }
 
 function handleAdminPluginRebuild(string $adminPath): void
@@ -1814,6 +2108,8 @@ function handleAdminPluginRebuild(string $adminPath): void
     Gate::authorize('plugin:manage');
     PluginManager::rebuildCache();
     RouterCompiler::compile();
+    require_once CORE_PATH . '/Integrity.php';
+    Integrity::run(true);
     header('Location: /' . $adminPath . '/plugins?rebuilt=1');
     exit;
 }
@@ -1821,12 +2117,82 @@ function handleAdminPluginRebuild(string $adminPath): void
 function handleAdminPluginDelete(string $adminPath): void
 {
     Gate::authorize('plugin:manage');
+    requireReauth($adminPath, '/plugins', 'plugin', 'delete');
     $name = basename($_POST['name'] ?? '');
+    $sqlError = null;
     if ($name !== '') {
-        PluginManager::delete($name);
+        $sqlError = PluginManager::delete($name);
+        Audit::log('plugin', 'deleted', ['plugin' => $name]);
         RouterCompiler::compile();
     }
-    header('Location: /' . $adminPath . '/plugins?deleted=1');
+    header('Location: /' . $adminPath . '/plugins?deleted=1' . ($sqlError === null ? '' : '&error=' . urlencode(
+        HbpLocale::t('warn_plugin_uninstall_sql', 'The plugin was deleted, but its uninstall SQL failed, so tables it created may remain.') . ' ' . $sqlError)));
+    exit;
+}
+
+/** Put the scanner's rule names into the viewer's language (the findings keep only the rule key). */
+function adminScanLabels(array $findings): array
+{
+    foreach ($findings as &$f) {
+        $f['label'] = HbpLocale::t('scan_rule_' . $f['rule'], $f['rule']);
+    }
+    unset($f);
+    return $findings;
+}
+
+/** What changed outside the admin panel, in detail, with the buttons to accept it. */
+function handleAdminIntegrity(array $common): void
+{
+    Gate::authorize('plugin:manage');
+    require_once CORE_PATH . '/Integrity.php';
+    $integrity = Integrity::state() ?: Integrity::run(false);   // never checked yet: check now
+    foreach ($integrity['plugins'] ?? [] as $pid => $p) {
+        $integrity['plugins'][$pid]['scan'] = adminScanLabels($p['scan'] ?? []);
+    }
+    View::render('admin/integrity', array_merge($common, compact('integrity')));
+}
+
+function handleAdminIntegrityCheck(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    require_once CORE_PATH . '/Integrity.php';
+    Integrity::run(true);
+    adminRedirect($adminPath, '/integrity');
+}
+
+/**
+ * Accepting a change does not change any file: it records the files as they are. It also lets a
+ * plugin the check stopped run again, which is code that was already on the server and active.
+ */
+function handleAdminIntegrityAckPlugin(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    require_once CORE_PATH . '/Integrity.php';
+    $id = basename((string)($_POST['name'] ?? ''));
+    if (in_array($id, PluginManager::activeIds(), true)) {
+        try {
+            Integrity::ackPlugin($id);
+        } catch (RuntimeException $e) {
+            adminRedirect($adminPath, '/integrity', ['error' => $e->getMessage()]);
+        }
+    }
+    adminRedirect($adminPath, '/integrity');
+}
+
+function handleAdminIntegrityAckCore(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    require_once CORE_PATH . '/Integrity.php';
+    Integrity::ackCore();
+    adminRedirect($adminPath, '/integrity');
+}
+
+function handleAdminPluginErrorsClear(string $adminPath): void
+{
+    Gate::authorize('plugin:manage');
+    PluginErrors::clear();
+    Audit::log('plugin', 'errors_cleared');
+    header('Location: /' . $adminPath . '/plugins');
     exit;
 }
 
@@ -1837,8 +2203,18 @@ function handleAdminPluginDelete(string $adminPath): void
 function handleAdminThemes(array $common): void
 {
     Gate::authorize('theme:manage');
-    $themes = ThemeManager::scan();
-    View::render('admin/themes', array_merge($common, compact('themes')));
+    $themes      = ThemeManager::scan();
+    $installGate = adminGateView('ALLOW_THEME_INSTALL');
+    require_once CORE_PATH . '/ThemeInstaller.php';
+    ThemeInstaller::cleanupExpired();
+    $interrupted = ThemeInstaller::interrupted();
+    $backups     = [];
+    foreach (array_keys($themes) as $name) {
+        if (($b = ThemeInstaller::backup((string)$name)) !== null) {
+            $backups[$name] = $b;
+        }
+    }
+    View::render('admin/themes', array_merge($common, compact('themes', 'installGate', 'interrupted', 'backups'), adminReauthView('/themes')));
 }
 
 function handleAdminThemeActivate(string $adminPath): void
@@ -1858,33 +2234,107 @@ function handleAdminThemeInstall(string $adminPath): void
 {
     Gate::authorize('theme:manage');
 
-    // Fully disable web-based theme installation when ALLOW_THEME_INSTALL=false.
-    if (!Env::bool('ALLOW_THEME_INSTALL', false)) {
-        header('Location: /' . $adminPath . '/themes?error=disabled');
+    // Web-based theme installation only while ALLOW_THEME_INSTALL is open (a date in .env, or true)
+    if (!Env::gate('ALLOW_THEME_INSTALL', true)['open']) {
+        Audit::log('theme', 'refused', ['action' => 'install', 'reason' => 'switch_closed']);
+        header('Location: /' . $adminPath . '/themes?error='
+            . urlencode(adminGateView('ALLOW_THEME_INSTALL')['closed']));
         exit;
     }
     if (!isset($_FILES['zip']) || $_FILES['zip']['error'] !== UPLOAD_ERR_OK) {
-        header('Location: /' . $adminPath . '/themes?error=upload');
-        exit;
+        adminRedirect($adminPath, '/themes', ['error' => HbpLocale::t('plugin_installed_fail', 'Installation failed.')]);
     }
 
-    // ThemeInstaller performs zip-slip countermeasures, validation, and auditing.
+    // Uploading only stages the ZIP (checked, copied to storage/, not used): it is applied from
+    // the review, which is where the password is asked for.
     require_once CORE_PATH . '/ThemeInstaller.php';
     try {
-        ThemeInstaller::install($_FILES['zip']['tmp_name']);
-        header('Location: /' . $adminPath . '/themes?installed=1');
+        $token = ThemeInstaller::stageZip($_FILES['zip']['tmp_name']);
+        adminRedirect($adminPath, '/themes/review?token=' . $token);
     } catch (RuntimeException $e) {
-        header('Location: /' . $adminPath . '/themes?error=' . urlencode($e->getMessage()));
+        adminRedirect($adminPath, '/themes', ['error' => $e->getMessage()]);
     }
-    exit;
+}
+
+function handleAdminThemeReview(array $common): void
+{
+    Gate::authorize('theme:manage');
+    require_once CORE_PATH . '/ThemeInstaller.php';
+    $review = ThemeInstaller::review(is_string($_GET['token'] ?? null) ? $_GET['token'] : '');
+    if ($review === null) {
+        adminRedirect($common['adminPath'], '/themes', ['error' => HbpLocale::t('err_review_expired', 'This review has expired or was already used. Upload or stage it again.')]);
+    }
+    $review['scan'] = adminScanLabels($review['scan'] ?? []);
+    $installGate    = adminGateView('ALLOW_THEME_INSTALL');
+    View::render('admin/theme_review', array_merge($common, compact('review', 'installGate'),
+        adminReauthView('/themes/review?token=' . $review['token'])));
+}
+
+/** Apply a reviewed theme: the switch must be open and the password confirmed. */
+function handleAdminThemeApply(string $adminPath): void
+{
+    Gate::authorize('theme:manage');
+    $token = is_string($_POST['token'] ?? null) && preg_match('/^[a-f0-9]{16}$/', $_POST['token']) ? $_POST['token'] : '';
+    $back  = '/themes/review?token=' . $token;
+    if (!Env::gate('ALLOW_THEME_INSTALL', true)['open']) {
+        Audit::log('theme', 'refused', ['action' => 'apply', 'reason' => 'switch_closed']);
+        adminRedirect($adminPath, $back, ['error' => adminGateView('ALLOW_THEME_INSTALL')['closed']]);
+    }
+    requireReauth($adminPath, $back, 'theme', 'apply');
+    require_once CORE_PATH . '/ThemeInstaller.php';
+    try {
+        adminRedirect($adminPath, '/themes', ['applied' => ThemeInstaller::apply($token)]);
+    } catch (RuntimeException $e) {
+        adminRedirect($adminPath, ThemeInstaller::review($token) !== null ? $back : '/themes', ['error' => $e->getMessage()]);
+    }
+}
+
+function handleAdminThemeDiscard(string $adminPath): void
+{
+    Gate::authorize('theme:manage');
+    require_once CORE_PATH . '/ThemeInstaller.php';
+    ThemeInstaller::discard(is_string($_POST['token'] ?? null) ? $_POST['token'] : '');
+    adminRedirect($adminPath, '/themes');
+}
+
+function handleAdminThemeRollback(string $adminPath): void
+{
+    Gate::authorize('theme:manage');
+    if (!Env::gate('ALLOW_THEME_INSTALL', true)['open']) {
+        Audit::log('theme', 'refused', ['action' => 'rollback', 'reason' => 'switch_closed']);
+        adminRedirect($adminPath, '/themes', ['error' => adminGateView('ALLOW_THEME_INSTALL')['closed']]);
+    }
+    requireReauth($adminPath, '/themes', 'theme', 'rollback');
+    require_once CORE_PATH . '/ThemeInstaller.php';
+    try {
+        ThemeInstaller::rollback(basename((string)($_POST['name'] ?? '')));
+        adminRedirect($adminPath, '/themes', ['rolledback' => '1']);
+    } catch (RuntimeException $e) {
+        adminRedirect($adminPath, '/themes', ['error' => $e->getMessage()]);
+    }
+}
+
+/** Finish or undo an interrupted theme operation: the password, not the switch (a recovery must not be blocked). */
+function handleAdminThemeRepair(string $adminPath): void
+{
+    Gate::authorize('theme:manage');
+    requireReauth($adminPath, '/themes', 'theme', 'repair');
+    require_once CORE_PATH . '/ThemeInstaller.php';
+    try {
+        adminRedirect($adminPath, '/themes', ['notice' => ThemeInstaller::repair(basename((string)($_POST['name'] ?? '')))]);
+    } catch (RuntimeException $e) {
+        adminRedirect($adminPath, '/themes', ['error' => $e->getMessage()]);
+    }
 }
 
 function handleAdminThemeDelete(string $adminPath): void
 {
     Gate::authorize('theme:manage');
+    requireReauth($adminPath, '/themes', 'theme', 'delete');
     $name = basename($_POST['name'] ?? '');
     try {
         ThemeManager::delete($name);
+        Audit::log('theme', 'deleted', ['theme' => $name]);
         header('Location: /' . $adminPath . '/themes?deleted=1');
     } catch (RuntimeException $e) {
         header('Location: /' . $adminPath . '/themes?error=' . urlencode($e->getMessage()));
@@ -2016,6 +2466,216 @@ function handleAdminSeoSave(string $adminPath): void
     exit;
 }
 
+// ----------------------------------------------------------------
+// Upgrade without SSH (Maintenance > Upgrade): after the new files are uploaded over FTP
+// ----------------------------------------------------------------
+
+/**
+ * Checks before an upgrade. Read-only, except for a file written and removed again to see whether
+ * storage/ and plugins/_incoming/ can be fetched over HTTP.
+ *
+ * @return array{checks:array<int,array{label:string,state:string,detail:string}>,blocking:bool}
+ *         state: ok | warn | fail | unknown; blocking when anything failed
+ */
+function adminUpgradePreflight(): array
+{
+    $checks = [];
+    $add = static function (string $label, string $state, string $detail = '') use (&$checks): void {
+        $checks[] = compact('label', 'state', 'detail');
+    };
+
+    $add(HbpLocale::t('upg_php', 'PHP version'), PHP_VERSION_ID >= 80000 ? 'ok' : 'fail', PHP_VERSION);
+    $driver   = Env::get('DB_DRIVER', 'mysql');
+    $required = ['pdo', 'pdo_' . $driver, 'mbstring', 'json'];
+    $missing  = array_values(array_filter($required, static fn($e) => !extension_loaded($e)));
+    $add(HbpLocale::t('upg_extensions', 'PHP extensions'), $missing === [] ? 'ok' : 'fail',
+        $missing === [] ? implode(', ', $required) : HbpLocale::t('upg_missing', 'missing:') . ' ' . implode(', ', $missing));
+    $optional = array_values(array_filter(['gd', 'zip', 'sodium', 'curl'], static fn($e) => !extension_loaded($e)));
+    if ($optional !== []) {
+        $add(HbpLocale::t('upg_extensions_optional', 'Optional PHP extensions'), 'warn', HbpLocale::t('upg_missing', 'missing:') . ' ' . implode(', ', $optional));
+    }
+
+    $notWritable = [];
+    foreach (['storage', 'storage/cache', 'storage/plugins', 'storage/upload', 'storage/logs', 'plugins', 'public', 'public/assets'] as $dir) {
+        if (!is_dir(ROOT_PATH . '/' . $dir) || !is_writable(ROOT_PATH . '/' . $dir)) {
+            $notWritable[] = $dir . '/';
+        }
+    }
+    $add(HbpLocale::t('upg_writable', 'Folders PHP must be able to write'), $notWritable === [] ? 'ok' : 'fail',
+        $notWritable === [] ? '' : HbpLocale::t('upg_not_writable', 'not writable:') . ' ' . implode(', ', $notWritable));
+
+    foreach (['storage/upload', 'plugins/_incoming'] as $dir) {
+        $reach = adminPublicReach($dir);
+        $add(HbpLocale::t('upg_not_public', ':dir is not reachable from the web', ['dir' => $dir . '/']),
+            $reach === 'fail' ? 'fail' : ($reach === 'ok' ? 'ok' : 'unknown'),
+            match ($reach) {
+                'fail'  => HbpLocale::t('upg_reachable', 'It can be fetched over HTTP: fix the web server configuration (deploy/) before going on.'),
+                'ok'    => '',
+                default => HbpLocale::t('upg_reach_unknown', 'Could not be checked (no SITE_URL or curl, or the site did not answer).'),
+            });
+    }
+
+    try {
+        $posts = (int)(DB::fetchOne('SELECT COUNT(*) AS n FROM posts')['n'] ?? 0);
+        $add(HbpLocale::t('upg_db', 'Database connection'), 'ok', $driver);
+        if ($posts > 50000) {
+            $add(HbpLocale::t('upg_large', 'Size of the site'), 'warn',
+                HbpLocale::t('upg_large_detail', ':count posts: a migration that alters the posts table may take longer than PHP is allowed to run. Use the CLI if you can.', ['count' => $posts]));
+        }
+    } catch (Throwable $e) {
+        $add(HbpLocale::t('upg_db', 'Database connection'), 'fail', PluginErrors::clean($e->getMessage()));
+    }
+
+    $blocking = false;
+    foreach ($checks as $c) {
+        $blocking = $blocking || $c['state'] === 'fail';
+    }
+    return ['checks' => $checks, 'blocking' => $blocking];
+}
+
+/**
+ * Whether a file put in $dir can be fetched over HTTP: 'fail' when it can (the folder is public),
+ * 'ok' when it cannot, 'unknown' when it could not be tried. The same way the installer checks the
+ * document root, with short timeouts so a site that does not answer itself cannot hang the screen.
+ */
+function adminPublicReach(string $dir): string
+{
+    $site = rtrim(Env::get('SITE_URL', ''), '/');
+    $path = ROOT_PATH . '/' . $dir;
+    if ($site === '' || !function_exists('curl_init') || !is_dir($path)) {
+        return 'unknown';
+    }
+    $name  = '.hbp_reach_' . bin2hex(random_bytes(8)) . '.txt';
+    $token = bin2hex(random_bytes(16));
+    if (@file_put_contents($path . '/' . $name, $token) === false) {
+        return 'unknown';
+    }
+    try {
+        $ch = curl_init($site . '/' . $dir . '/' . $name);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 5,
+        ]);
+        $body = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+        if ($body === false || $code === 0) {
+            return 'unknown';
+        }
+        return $code === 200 && trim((string)$body) === $token ? 'fail' : 'ok';
+    } finally {
+        @unlink($path . '/' . $name);
+    }
+}
+
+function handleAdminUpgrade(array $common): void
+{
+    Gate::authorize('maintenance:run');
+    $common['currentPage'] = 'maintenance';
+    $preflight  = adminUpgradePreflight();
+    $dbVersion  = Migrator::currentVersion();
+    $codeVersion = class_exists('Schema') ? Schema::SCHEMA_VERSION : '';
+    try {
+        $pending = array_values(Migrator::pending());
+    } catch (Throwable) {
+        $pending = [];
+    }
+    $opcache = [
+        'enabled'  => function_exists('opcache_get_status') && is_array(@opcache_get_status(false)),
+        'validate' => (string)ini_get('opcache.validate_timestamps'),
+    ];
+    $migrateGate  = adminGateView('WEB_UPGRADE_UNTIL');
+    $upgradeLog   = $_SESSION['upgrade_log'] ?? [];
+    unset($_SESSION['upgrade_log']);
+    $recompileFrom = (int)($_SESSION['recompile_after'] ?? 0);
+    View::render('admin/upgrade', array_merge($common,
+        compact('preflight', 'dbVersion', 'codeVersion', 'pending', 'opcache', 'migrateGate', 'upgradeLog', 'recompileFrom'),
+        ['installGate' => $migrateGate],
+        adminReauthView('/maintenance/upgrade')));
+}
+
+/**
+ * Forget the compiled code PHP keeps in memory. From the CLI this does not reach the web server's
+ * PHP-FPM, which is why it is a button: after uploading files over FTP to a server with
+ * opcache.validate_timestamps=0, the old code keeps running until this is done.
+ */
+function handleAdminOpcacheReset(string $adminPath): void
+{
+    Gate::authorize('maintenance:run');
+    $ok = function_exists('opcache_reset') && @opcache_reset();
+    Audit::log('admin', 'opcache_reset', ['ok' => $ok ? 'yes' : 'no']);
+    adminRedirect($adminPath, '/maintenance/upgrade', $ok
+        ? ['notice' => HbpLocale::t('upg_opcache_done', 'The opcode cache was cleared.')]
+        : ['error' => HbpLocale::t('upg_opcache_failed', 'The opcode cache could not be cleared here (opcache is off, or opcache.restrict_api forbids it). Restart PHP from your hosting control panel instead.')]);
+}
+
+/** Apply pending migrations: WEB_UPGRADE_UNTIL must be open, the password confirmed, and a backup taken. */
+function handleAdminMigrate(string $adminPath): void
+{
+    Gate::authorize('maintenance:run');
+    $back = '/maintenance/upgrade';
+    if (!Env::gate('WEB_UPGRADE_UNTIL')['open']) {
+        Audit::log('admin', 'refused', ['action' => 'migrate', 'reason' => 'switch_closed']);
+        adminRedirect($adminPath, $back, ['error' => adminGateView('WEB_UPGRADE_UNTIL')['closed']]);
+    }
+    requireReauth($adminPath, $back, 'admin', 'migrate');
+    if (empty($_POST['backup_done'])) {
+        adminRedirect($adminPath, $back, ['error' => HbpLocale::t('err_migrate_backup', 'Take a backup of the database first, and tick the box to say so.')]);
+    }
+    if (adminUpgradePreflight()['blocking']) {
+        adminRedirect($adminPath, $back, ['error' => HbpLocale::t('err_migrate_preflight', 'Fix the failed checks first.')]);
+    }
+
+    $log = [];
+    try {
+        $count = Migrator::migrate(static function (string $line) use (&$log): void { $log[] = $line; });
+        Audit::log('admin', 'migrated', ['count' => $count]);
+        $_SESSION['upgrade_log'] = $log;
+        adminRedirect($adminPath, $back, ['notice' => HbpLocale::t('upg_migrated', 'Applied :count migration(s).', ['count' => $count])]);
+    } catch (MigrationFailed $e) {
+        Audit::log('admin', 'migrate_failed', ['version' => $e->version, 'statement' => $e->statementNo]);
+        $log[] = 'Error: ' . PluginErrors::clean($e->getMessage());
+        $log[] = 'Statement: ' . PluginErrors::clean($e->statement);
+        $_SESSION['upgrade_log'] = $log;
+        adminRedirect($adminPath, $back, ['error' => ($e->rolledBack
+            ? HbpLocale::t('err_migrate_rolled_back', ':version failed and was rolled back; the database is as it was before it. Fix the cause and run it again.', ['version' => $e->version])
+            : HbpLocale::t('err_migrate_partial', ':version failed at statement :no and was not recorded. The statements before it stay applied (MySQL). Fix the cause and run it again: it resumes from :version.', ['version' => $e->version, 'no' => $e->statementNo]))]);
+    } catch (RuntimeException $e) {
+        adminRedirect($adminPath, $back, ['error' => $e->getMessage()]);
+    }
+}
+
+/**
+ * One batch of re-rendering every post, for the upgrade screen's script (JSON). Each request stays
+ * well inside max_execution_time; the script posts the next batch until done. Where it got to is
+ * kept in the session, so a closed tab can carry on from there.
+ */
+function handleAdminRecompileBatch(): void
+{
+    Gate::authorize('maintenance:run');
+    require_once CORE_PATH . '/PostCompiler.php';
+    header('Content-Type: application/json; charset=UTF-8');
+    $after = max(0, (int)($_POST['after_id'] ?? 0));
+    $extra = [];
+    if ($after === 0) {
+        if (!empty($_POST['reassess'])) {
+            $extra['reassessed'] = count(PostCompiler::reassess());
+        }
+        $extra['total'] = (int)(DB::fetchOne('SELECT COUNT(*) AS n FROM posts')['n'] ?? 0);
+        Audit::log('admin', 'recompile_started', ['reassess' => empty($_POST['reassess']) ? 'no' : 'yes']);
+    }
+    $result = PostCompiler::recompileBatch($after, 200);
+    $_SESSION['recompile_after'] = $result['done'] ? 0 : $result['last_id'];
+    if ($result['done']) {
+        PostCompiler::finishRecompile();
+        Audit::log('admin', 'recompile_finished');
+    }
+    echo json_encode($result + $extra, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 function handleAdminMaintenance(array $common): void
 {
     Gate::authorize('maintenance:run');
@@ -2051,6 +2711,8 @@ function handleAdminMaintenanceRun(string $adminPath): void
             hbpInstallBundledPluginSchemas();   // Create bundled plugin tables (badwords, etc.; idempotent)
             PluginManager::rebuildCache();
             RouterCompiler::compile();
+            require_once CORE_PATH . '/Integrity.php';
+            Integrity::run(true);
             break;
 
         case 'theme':
@@ -2097,6 +2759,8 @@ function handleAdminMaintenanceRun(string $adminPath): void
             ThemeManager::publishAll();
             ViewCompiler::clearAll();
             CacheManager::purgeAll();
+            require_once CORE_PATH . '/Integrity.php';
+            Integrity::run(true);
             break;
 
         default:
@@ -2122,7 +2786,7 @@ function hbpInstallBundledPluginSchemas(): void
     }
     $pdo = DB::getInstance();
     foreach (scandir($pluginsDir) as $pluginId) {
-        if ($pluginId === '.' || $pluginId === '..') {
+        if ($pluginId[0] === '.' || $pluginId[0] === '_') {   // _incoming/ etc. are not plugins
             continue;
         }
         $sqlFile = $pluginsDir . '/' . $pluginId . '/database/install.' . $driver . '.sql';

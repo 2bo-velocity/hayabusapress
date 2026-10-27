@@ -223,6 +223,8 @@ class ThemeManager
         }
         self::removeDir(self::dir($name));
         self::removeDir(self::PUBLISH_DIR . '/' . $name);
+        require_once __DIR__ . '/ThemeInstaller.php';
+        ThemeInstaller::forget($name);   // its kept previous version goes too
     }
 
     /** Copy themes/{name}/assets/* into public/assets/themes/{name}/ (clean republish). */
@@ -289,41 +291,17 @@ class ThemeManager
         }
     }
 
+    /** Copy assets, skipping links; a file that cannot be copied is skipped (as before). */
     private static function copyDir(string $src, string $dst): void
     {
-        @mkdir($dst, 0755, true);
-        $items = scandir($src) ?: [];
-        foreach ($items as $item) {
-            if ($item === '.' || $item === '..') {
-                continue;
-            }
-            $from = $src . '/' . $item;
-            $to   = $dst . '/' . $item;
-            if (is_dir($from)) {
-                self::copyDir($from, $to);
-            } else {
-                @copy($from, $to);
-            }
-        }
+        require_once __DIR__ . '/FileTree.php';
+        FileTree::copy($src, $dst, false);
     }
 
+    /** Remove a directory tree, never following a symbolic link. */
     private static function removeDir(string $dir): void
     {
-        if (!is_dir($dir)) {
-            return;
-        }
-        $items = scandir($dir) ?: [];
-        foreach ($items as $item) {
-            if ($item === '.' || $item === '..') {
-                continue;
-            }
-            $path = $dir . '/' . $item;
-            if (is_dir($path)) {
-                self::removeDir($path);
-            } else {
-                @unlink($path);
-            }
-        }
-        @rmdir($dir);
+        require_once __DIR__ . '/FileTree.php';
+        FileTree::remove($dir);
     }
 }

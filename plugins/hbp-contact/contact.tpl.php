@@ -13,6 +13,7 @@
         {% endif %}
 
         <form method="post" class="hbp-contact-form">
+            {{{ Security::csrfField() }}}
             <!-- Honeypot (spam-bot defense) -->
             <input type="text" name="hbp_hp_email_field" hidden tabindex="-1" autocomplete="off" aria-hidden="true">
 

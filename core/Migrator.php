@@ -21,6 +21,19 @@ class Migrator
     private const BASELINE = 'BASELINE';
 
     /**
+     * Errors that mean "this change is already in place", which is the idempotent outcome of
+     * re-running a migration (MySQL has no ADD COLUMN / ADD INDEX IF NOT EXISTS). Matched by code,
+     * never by message text: the message is translated with the server's locale.
+     * MySQL by driver error number (its SQLSTATE for a duplicate index is the generic 42000):
+     *   1050 table exists · 1060 duplicate column · 1061 duplicate key name ·
+     *   1091 can't drop (already gone) · 1826 duplicate foreign key name
+     * PostgreSQL by SQLSTATE: 42P07 duplicate_table (also indexes) · 42701 duplicate_column ·
+     *   42710 duplicate_object (constraints)
+     */
+    private const ALREADY_APPLIED_MYSQL = [1050, 1060, 1061, 1091, 1826];
+    private const ALREADY_APPLIED_PGSQL = ['42P07', '42701', '42710'];
+
+    /**
      * Split SQL into statements. Unlike a naive explode(';'),
      * it does not split on ; inside string literals ('...' / "..."), line comments (--), block comments,
      * or PostgreSQL dollar-quoting ($$ ... $$ / $tag$ ... $tag$).
@@ -218,65 +231,151 @@ class Migrator
         return $migrations;
     }
 
+    /** One migration at a time: db:migrate and the admin panel's upgrade take the same lock. */
+    private const LOCK_FILE = STORAGE_PATH . '/.migrate.lock';
+
     /**
      * Apply pending migrations in ascending order.
+     *
+     * @param callable|null $out receives each progress line (default: echo, for the CLI)
      * @return int the number of migrations applied
+     * @throws MigrationFailed when a statement fails (that migration is not recorded)
+     * @throws RuntimeException when another migration is running
      */
-    public static function migrate(): int
+    public static function migrate(?callable $out = null): int
     {
-        self::ensureMigrationsTable();
+        $out ??= static function (string $line): void { echo $line, "\n"; };
+        $lock = @fopen(self::LOCK_FILE, 'c');
+        if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
+            throw new RuntimeException(class_exists('HbpLocale')
+                ? HbpLocale::t('err_migrate_busy', 'Another migration is running. Wait for it to finish.')
+                : 'Another migration is running. Wait for it to finish.');
+        }
+        @ignore_user_abort(true);   // a closed browser tab must not cut a migration short
+        @set_time_limit(0);
 
-        $applied   = self::appliedVersions();
-        $available = self::available();
-        $count     = 0;
+        try {
+            self::ensureMigrationsTable();
+            $applied   = self::appliedVersions();
+            $available = self::available();
+            $count     = 0;
 
-        foreach ($available as $version => $meta) {
-            if (isset($applied[$version])) {
-                // checksum comparison (tamper detection).
-                // Skip rows whose checksum is the BASELINE sentinel: those changes arrived folded into
-                // the full schema (schema.{driver}.sql stamps them), so there is no file checksum to
-                // match. Comparing them would report tampering on every correctly installed database.
-                if ($applied[$version]['checksum'] !== self::BASELINE
-                    && $applied[$version]['checksum'] !== $meta['checksum']) {
-                    echo "Warning: checksum for migration {$version} has changed.\n";
-                }
-                continue;
-            }
-
-            echo "Applying: {$version} ({$meta['name']})...\n";
-            $sql = file_get_contents($meta['file']);
-
-            // Split on semicolons and run individually (idempotent).
-            // Keep statements that have a leading comment block as execution targets (do not drop the whole statement due to a leading comment).
-            $statements = self::splitStatements($sql);
-            $pdo = DB::getInstance();
-            foreach ($statements as $stmt) {
-                try {
-                    $pdo->exec($stmt);
-                } catch (PDOException $e) {
-                    // Ignore duplicates of existing tables/columns/indexes.
-                    // MySQL has no ADD COLUMN/INDEX IF NOT EXISTS, so re-running a migration reports
-                    // the duplicate rather than doing nothing — that is the idempotent outcome here.
-                    $msg = $e->getMessage();
-                    if (!str_contains($msg, 'already exists')
-                        && !str_contains($msg, 'Duplicate column')
-                        && !str_contains($msg, 'Duplicate key name')
-                        && !str_contains($msg, 'Can\'t DROP')) {
-                        echo "  Error: {$msg}\n";
+            foreach ($available as $version => $meta) {
+                if (isset($applied[$version])) {
+                    // checksum comparison (tamper detection).
+                    // Skip rows whose checksum is the BASELINE sentinel: those changes arrived folded into
+                    // the full schema (schema.{driver}.sql stamps them), so there is no file checksum to
+                    // match. Comparing them would report tampering on every correctly installed database.
+                    if ($applied[$version]['checksum'] !== self::BASELINE
+                        && $applied[$version]['checksum'] !== $meta['checksum']) {
+                        $out("Warning: checksum for migration {$version} has changed.");
                     }
+                    continue;
                 }
-            }
 
-            // Record the application
+                $out("Applying: {$version} ({$meta['name']})...");
+                self::applyOne($version, $meta);
+                $out("  Done: {$version}");
+                $count++;
+            }
+            return $count;
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    /**
+     * Migrations not applied yet, in order.
+     *
+     * @return array<string,array{version:string,name:string,file:string,checksum:string}>
+     */
+    public static function pending(): array
+    {
+        return array_diff_key(self::available(), self::appliedVersions());
+    }
+
+    /**
+     * Apply one migration file and record it. Throws MigrationFailed, without recording, when a
+     * statement fails for a reason other than "already applied", so the next db:migrate retries it.
+     *
+     * @param array{name:string,checksum:string,file:string} $meta
+     */
+    private static function applyOne(string $version, array $meta): void
+    {
+        self::runScript((string)file_get_contents($meta['file']), $version, static function () use ($version, $meta): void {
             DB::execute(
                 'INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?,?,?,?)',
                 [$version, $meta['name'], $meta['checksum'], date('Y-m-d H:i:s')]
             );
-            echo "  Done: {$version}\n";
-            $count++;
-        }
+        });
+    }
 
-        return $count;
+    /**
+     * Run a SQL script statement by statement: a migration, or a plugin's install / uninstall SQL.
+     * Statements that fail only because their change is already in place are skipped (see the
+     * constants); any other failure throws MigrationFailed naming the statement.
+     *
+     * PostgreSQL runs DDL inside transactions, so the whole script (and $finally, which records it)
+     * is one transaction: a failure leaves the database exactly as it was. Each statement gets a
+     * savepoint, because an error aborts a PostgreSQL transaction and an "already applied" error
+     * must not take the rest of the script with it. MySQL commits every DDL statement on its own and
+     * cannot do this: the statements before the failing one stay applied, which scripts are written
+     * to tolerate (a re-run skips what is already there).
+     *
+     * @param string        $label   what the script is, for the error (a version, or "plugin x install")
+     * @param callable|null $finally run after the last statement, inside the same transaction
+     * @throws MigrationFailed
+     */
+    public static function runScript(string $sql, string $label, ?callable $finally = null): void
+    {
+        $pdo        = DB::getInstance();
+        $driver     = (string)$pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $transacted = $driver === 'pgsql';
+        $statements = self::splitStatements($sql);
+
+        if ($transacted) {
+            $pdo->beginTransaction();
+        }
+        try {
+            foreach ($statements as $i => $stmt) {
+                if ($transacted) {
+                    $pdo->exec('SAVEPOINT hbp_stmt');
+                }
+                try {
+                    $pdo->exec($stmt);
+                } catch (PDOException $e) {
+                    if (!self::isAlreadyApplied($e, $driver)) {
+                        throw new MigrationFailed($label, $i + 1, count($statements), $stmt, $e, $transacted);
+                    }
+                    if ($transacted) {
+                        $pdo->exec('ROLLBACK TO SAVEPOINT hbp_stmt');
+                    }
+                }
+            }
+            if ($finally !== null) {
+                $finally();
+            }
+            if ($transacted) {
+                $pdo->commit();
+            }
+        } catch (Throwable $e) {
+            if ($transacted && $pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /** Whether a failed statement only reports that its change is already in place (see the constants). */
+    public static function isAlreadyApplied(PDOException $e, string $driver): bool
+    {
+        $info = $e->errorInfo;
+        if ($driver === 'mysql') {
+            return in_array((int)($info[1] ?? 0), self::ALREADY_APPLIED_MYSQL, true);
+        }
+        $state = (string)($info[0] ?? $e->getCode());
+        return in_array($state, self::ALREADY_APPLIED_PGSQL, true);
     }
 
     /**
@@ -405,5 +504,30 @@ class Migrator
             echo "\n  [!] Checksum mismatch (possible tampering): " . implode(', ', $tampered) . "\n";
         }
         echo "\n";
+    }
+}
+
+/**
+ * A statement of a migration (or of a plugin's install / uninstall SQL) failed for a reason other
+ * than "already applied". A migration is then not recorded, so fixing the cause and running
+ * db:migrate again retries it. $version holds what was being run (Migrator::runScript()'s label).
+ */
+class MigrationFailed extends RuntimeException
+{
+    public function __construct(
+        public string $version,
+        public int $statementNo,
+        public int $statementCount,
+        public string $statement,
+        PDOException $previous,
+        public bool $rolledBack,
+    ) {
+        parent::__construct(sprintf(
+            '%s failed at statement %d of %d: %s',
+            $version,
+            $statementNo,
+            $statementCount,
+            $previous->getMessage()
+        ), 0, $previous);
     }
 }

@@ -38,4 +38,24 @@ class HbpHelloworldPlugin
         ));
         exit;
     }
+
+    /**
+     * content_render filter (reference implementation): a line holding only [[hello]] in a post
+     * becomes a greeting. Runs when the post is saved, previewed or re-rendered, never when it is
+     * read: the result is stored in content_html and served from the page cache.
+     *
+     * The rules every filter must keep: work on $context['html'] only; give the same HTML for the
+     * same body (no time, no randomness, no outside requests, no database writes); no exit. What it
+     * adds is then sanitized with the post's own trust, so it cannot add a script to a post that
+     * may not have one.
+     */
+    public static function greet(array &$context): void
+    {
+        if (!str_contains($context['html'], '[[hello]]')) {
+            return;
+        }
+        $dict  = HbpLocale::loadFrontendDictionary($context['lang']);
+        $hello = htmlspecialchars($dict['hbp-helloworld.body'] ?? 'The HBP Hello World plugin is working correctly.', ENT_QUOTES, 'UTF-8');
+        $context['html'] = str_replace('<p>[[hello]]</p>', '<p><strong>' . $hello . '</strong></p>', $context['html']);
+    }
 }

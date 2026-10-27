@@ -75,7 +75,9 @@ WordPress の「重さ・セキュリティの緩さ・積み上がった技術�
 | **ロールベースアクセス制御** | 静的RBACマトリクス（`permissions.php`・DBクエリゼロ）。4つのスタッフロール（Administrator / Editor / Author / Contributor）＋ Super User を、18の細粒度権限（記事・コメント・メディア・分類・ナビ・ブロック・テンプレート・リンク・メンテ・IP・プラグイン・テーマ・ユーザー・設定）にマッピング。 |
 | **ネイティブTOTP 2FA** | RFC 6238 準拠。リプレイ防止（`tfa_last_step`）、5回失敗でセッション破棄、time-step再利用検知。 |
 | **マニフェスト型プラグイン** | `manifest.json` でフックを宣言。フックレジストリは事前コンパイル＋優先度ソート済み。リクエストごとの全プラグインロードなし。`<head>` と `<body>` 末尾へ出す静的な HTML 断片はページキャッシュに焼き込まれ、実行時コストはゼロ。 |
-| **zip-slip安全インストーラ** | `PluginInstaller` が全ZIPエントリを検証し、シンボリックリンク＋zip爆弾を拒否、任意で Ed25519 署名を強制。 |
+| **zip-slip安全インストーラ** | `PluginInstaller` が全ZIPエントリを検証し、シンボリックリンク＋zip爆弾を拒否、任意で Ed25519 署名を強制（`manifest.json` の `"files"` で全ファイルを保証）。 |
+| **確認してから適用するプラグイン・テーマの更新** | 新しい版はいったん取り込み、確認（ファイルの差分・PHP の構文エラー・コードがしていること）を経てから適用する。インストール済みの版は退避して1回の操作で戻せ、途中で中断された更新は修復できる。 |
+| **改ざん検知** | プラグインのファイルを最後に承認したときの状態と、本体のファイルをリリースに付いてくる一覧（`core/release.files.php`）と、管理画面へのログイン時と再構築のたびに比べる（リクエストごとには行わない）。 |
 | **デュアルIPブロックリスト** | `blocked_ips` テーブルが POST型スパムをブロック。`SITE_IP_DENYLIST` はコンパイル済み配列でページ閲覧をブロック — DBヒットゼロ。 |
 | **Atom 1.0 + RSS 2.0 + JSON Feed** | 言語別の事前コンパイルフィード（`feed.atom.xml`・`feed.rss.xml`・`feed.json`。`FEED_FORMAT` で選ぶ）。記事公開時に生成 — 配信時DBゼロ。全 `<head>` に autodiscovery `<link>`。 |
 | **予約公開** | `status='scheduled'` ＋ `published_at`（UTC）。擬似cron（既定・**FPC高速パスへの影響ゼロ**＝整数1回比較）、OS cron、手動 `/cron` エンドポイントで発火。`published_at` が投稿日時の単一の真実。 |
@@ -168,6 +170,27 @@ php core/cli.php system:init && php core/cli.php plugins:rebuild
 
 **1.5.0**（`V001005000`）へ上げるときも、3 と 4 のあいだで `php core/cli.php posts:recompile` を1回実行します。
 既存の記事の文字数と読了時間を埋めます（連載は空の状態から始まるので、ほかに埋め直すものはありません）。
+
+**1.6.0** へ上げるときはスキーマの変更がありません（`SCHEMA_VERSION` は `V001005000` のまま）。`db:migrate` は何もしないので、
+手順4（`system:init`）だけを実行してください。アップグレード後の最初の `system:init`（または最初の管理画面へのログイン）が、
+改ざん検知のために、その時点のプラグインのファイルを承認済みとして記録します。
+
+#### SSH が無い場合
+
+新しいファイルを FTP でアップロードしてから、**管理画面 → メンテナンス → アップグレード**を開きます。同じ手順をブラウザで順に進めます。
+
+1. **事前確認** — PHP の版と拡張、書き込めるべきフォルダ、`storage/upload/` と `plugins/_incoming/` が HTTP で取得できないこと、
+   データベースへの接続。失敗があれば、データベースの手順へ進めません。
+2. **opcache のリセット** — PHP がメモリに持つコンパイル済みのコードを消します（Web サーバーの PHP で `opcache_reset()`）。
+   `opcache.validate_timestamps=0` のサーバーでは、これをしないとアップロード後も古いコードが動き続けます。CLI からは Web サーバーの
+   キャッシュに届きません。
+3. **データベース** — 未適用のマイグレーションを適用します。`.env` で `WEB_UPGRADE_UNTIL` を開いておくこと（後述）、パスワードの
+   再確認、データベースのバックアップを取ったことのチェックが必要です。
+4. **記事** — すべての記事を 200 件ずつ再生成します（リリースノートの `posts:recompile`）。PHP の実行時間の上限に収まり、
+   中断しても続きから再開できます。
+5. **キャッシュ** — **全キャッシュ再生成**（`system:init`）と同じです。
+
+推奨は SSH と CLI です。スキーマを変える画面の手順は、`.env` で期限付きで開かない限り使えません。
 
 > **手順4の中身はリリースごとに異なります。** スキーマ変更によっては、非正規化データを埋め直すまでサイトが正しく表示されません（よく使うのは `tags:reindex`＝`post_tags` の一覧キー、`counters:rebuild`＝`categories.post_count` / `tags.post_count`）。どれが必要かは各リリースのリリースノートに明記します。
 >
@@ -335,7 +358,7 @@ Nginx では `deploy/nginx.sample.conf` がフィードのファイルを直接�
 | `tool:key` | HMAC・暗号化用の `base64:` エンコード `APP_KEY` を生成 |
 | `tool:hash "pw"` | `SUPER_USER_PASSWORD_HASH` 用の bcrypt/argon2id ハッシュを生成 |
 | `db:install` | **新規インストール。** `schema.{driver}.sql`（フルスキーマ＋シード）を適用。末尾の baseline INSERT が `V001000000` を記録し、DBは即「最新」状態になる |
-| `db:migrate` | **アップグレード。** `schema_migrations` に未記録の `V…` のみを昇順・前進専用で適用し、各々を実 SHA-256 で記録 |
+| `db:migrate` | **アップグレード。** `schema_migrations` に未記録の `V…` のみを昇順・前進専用で適用し、各々を実 SHA-256 で記録。同時に実行できるのは1つだけ（管理画面のアップグレードとロックを共有）。文が失敗すると終了コード 1 で止まり、そのマイグレーションは記録しない（PostgreSQL はまるごと元に戻り、MySQL はそれより前の文が残る）。原因を直してもう一度実行する |
 | `db:status` | レポート：**DBの版 vs `SCHEMA_VERSION`（コード）vs ドライバ**、未適用マイグレーション一覧＋実行コマンド、checksum 検証（`BASELINE` はスキップ） |
 
 ### キャッシュ & ビルド
@@ -345,10 +368,20 @@ Nginx では `deploy/nginx.sample.conf` がフィードのファイルを直接�
 | `system:init` | 全キャッシュをコンパイル：ルート・メニュー・カテゴリ・タグ・サイドバー・SEO・プラグイン・著者シングルトン・セキュリティヘッダ |
 | `plugins:rebuild` | プラグインレジストリ＋優先度ソート済みフックマップを再コンパイル、ルート同期 |
 | `plugins:checksums {dir\|id}` | 全ファイルの SHA-256 を `manifest.json` の `"files"` に書く。署名するパッケージ用（`REQUIRE_SIGNED_PLUGINS`） |
+| `plugins:apply {id} [--yes] [--accept=author,signer,version]` | `plugins/_incoming/{id}/` を端末で確認して適用する。インストール済みの版は退避される。`--accept` で確認が求める同意を与える |
+| `plugins:rollback {id} [--yes]` | プラグインを退避してある前の版に戻す（データベースは戻らない） |
+| `plugins:repair [id]` | 中断されたプラグインの操作を完了させるか取り消す（id なしで一覧） |
+| `plugins:status` | 全プラグインと、直前の再構築で読み飛ばしたもの・管理画面の外で変わったファイル・起こしたエラー |
+| `plugins:ack {id}` | 管理画面の外で変わったプラグインの今のファイルを確認済みにする（PHP の構文エラーがある間は拒否） |
+| `plugins:scan {dir\|id}` | プラグインのコードがしていること — 確かめるための手がかりで、マルウェアの検査ではない |
+| `themes:rollback {name} [--yes]` | テーマを退避してある前の版に戻す |
+| `themes:repair [name]` | 中断されたテーマの操作を完了させるか取り消す（名前なしで一覧） |
+| `system:verify [--ack]` | 管理画面の外で変わったプラグインと本体のファイルを確認する。違いがあれば終了コード 1（cron から使える）。`--ack` は今の違いをすべて確認済みにする |
+| `release:files --list=FILE` | `core/release.files.php`（配布する全ファイルの SHA-256）を書く。リリースの作業で使うもので、サイトでは不要 |
 | `lang:rebuild [locale]` | 指定ロケール（または全ロケール）のMUIビューキャッシュを削除し再焼き付けを強制 |
 | `assets:rebuild` | テーマCSS/JS編集後、全FPC＋ビューキャッシュをパージし CSP ハッシュを再計算 |
 | `authors:rebuild` | `authors.cache.php` を再生成し、影響を受ける記事FPCをパージ |
-| `posts:recompile [--reassess [--user=ID]]` | 全記事で Markdown → HTML ＋ サニタイザを、各記事に記録された生 HTML の許可で再実行（サニタイザ規則・`SPONSORED_NOTICE_TEXT`・話者・カードの参照先を変えた後に使用）。自動の概要文と SNS 用文面、文字数と読了時間も作り直す。`--reassess` は先に、各本文を最後に保存した人の現在のロールから許可を付け直す（`--user=ID` で保存者を1人に絞る。`0` は Super User） |
+| `posts:recompile [--reassess [--user=ID]]` | 全記事で Markdown → HTML ＋ サニタイザを、各記事に記録された生 HTML の許可で再実行（サニタイザ規則・`SPONSORED_NOTICE_TEXT`・話者・カードの参照先を変えた後に使用）。自動の概要文と SNS 用文面、文字数と読了時間も作り直す。`--reassess` は先に、各本文を最後に保存した人の現在のロールから許可を付け直す（`--user=ID` で保存者を1人に絞る。`0` は Super User）。描画に失敗した記事は一覧に出して飛ばす（終了コード 1）。実行中に編集で保存された記事は、編集者が保存したままにする |
 | `blocks:rebuild` | `blocks.cache.php`（再利用ブロック）を再コンパイルし、全FPCをパージ |
 | `links:rebuild` | `links.cache.php`（`/go/` の別名表）を再コンパイル |
 | `media:gc [--days=N]` | `attachments` のどの行も参照しておらず N 日以上古い `storage/upload/` の孤児ドラフトメディアを回収（既定7日）。`{ab}/{cd}/` シャードを再帰走査 |
@@ -359,7 +392,7 @@ Nginx では `deploy/nginx.sample.conf` がフィードのファイルを直接�
 | `posts:publish-due` | `published_at` が到来した `scheduled` 記事を昇格（cron / 手動トリガー） |
 | `schedule:recompile` | `next_schedule.php`（次の擬似cron発火時刻）を再計算 |
 
-> **SSHなし？** **管理画面 → メンテナンス**ページが同じ再生成をブラウザから実行します — sitemap・feeds・plugins・**全キャッシュ**（`system:init` 相当）を再構築。`maintenance:run` 権限（Administrator または Super User、後述）が必要。CLI が使えない共有レンタルに最適。
+> **SSHなし？** **管理画面 → メンテナンス**ページが同じ再生成をブラウザから実行します — sitemap・feeds・plugins・**全キャッシュ**（`system:init` 相当）を再構築。`db:migrate` と `posts:recompile` は**メンテナンス → アップグレード**で行えます（[方法C](#方法c--既存インストールのアップグレード)）。`maintenance:run` 権限（Administrator または Super User、後述）が必要。CLI が使えない共有レンタルに最適。
 
 ### セキュリティ操作
 
@@ -845,13 +878,15 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 蓄積型XSS | 保存時の DOM 許可リストサニタイザ（`ext-dom`）＋ テンプレートの `{{ }}` 自動エスケープ。ルビ/傍点記法は属性値を許可リスト化したうえで `<ruby>`/`<em class=hbp-bouten>` にコンパイル |
 | CSRF | **すべて**の管理 POST フォームに `Security::csrfField()` — ログイン・2FA 画面も含む（ソフト検証：トークン不一致はハード403ではなくフォーム再描画）＋ `SameSite=Lax` Cookie |
 | 入力バリデーション | 全管理保存パスにスキーマ制約由来のサーバー側検証：列挙値の許可リスト（`type`・`status`・`role`・メニュー/サイドバーのロケーション・ウィジェットキー）、`VARCHAR(n)` の長さ上限、`NOT NULL` 必須項目、`UNIQUE` 衝突を 500 にせず捕捉。メニュー/SNS の URL は `http(s)`/相対のみ許可（`javascript:` 排除）、メールは形式検証 |
-| ログイン総当たり | `auth_throttle`：IP単位＋アカウント単位の指数バックオフ。UIにロックアウトのカウントダウンを表示 |
+| ログイン総当たり | `auth_throttle`：15分以内にアカウントで5回、IP で30回失敗するとロックし、指数バックオフ（最長1時間）。UIにロックアウトのカウントダウンを表示。パスワードの再確認も同じ回数に数える |
+| 管理画面のセッションの奪取 | プラグイン・テーマのインストール・更新・前の版に戻すと、画面からのデータベースのアップグレードには、`.env` で期限付きで開く鍵（既定は閉じている。後述）**と**パスワード（2FA を使っていれば認証コードも）の再確認が要る。プラグイン・テーマの削除にはパスワードの再確認が要る。確認は10分間有効 |
+| ファイルの改ざん | 改ざん検知：プラグインのファイルを最後に承認したときの状態と、本体のファイルを `core/release.files.php` と比べ、`core/`・`public/`・`themes/default/` にあるリリースに無い `.php` も拾う。管理画面へのログイン時と再構築のたびに確認し、全ページに表示して Super User に1回メールする。気づくための仕組みで、ファイルを書き換えられる人は記録も書き換えられる |
 | 2FA リプレイ | `users.tfa_last_step` が同一 time-step の再利用を防止（RFC 6238） |
 | 2FA 総当たり | 5回失敗で仮認証セッションを破棄 |
 | セッション固定化 | ログイン成功ごとに `session_regenerate_id(true)` |
 | タイミング攻撃 | ユーザー不在時はダミーハッシュ検証で応答時間を一定化 |
 | パストラバーサル（メディア） | 全アップロードに `basename()` ＋ 拡張子許可リスト |
-| パストラバーサル（プラグインZIP） | `PluginInstaller` が全エントリを検証 — `../`・絶対パス・シンボリックリンク・zip爆弾を拒否 |
+| パストラバーサル（プラグインZIP） | `PluginInstaller` が全エントリを検証 — `../`・絶対パス・シンボリックリンク・zip爆弾を拒否。プラグインとテーマのフォルダの複写・移動・削除は、シンボリックリンクを決してたどらない |
 | コメントスパム | ハニーポット項目 ＋ `before_comment_create` フックパイプライン ＋ IPブロックリスト |
 | CSPバイパス | 事前コンパイルのハッシュベース CSP；`report-only` → `enforce` の段階的ロールアウト |
 | 管理画面の発見 | `.env` の `ADMIN_PATH` でログインURLを秘匿 — 任意の値が有効（フロントコントローラルーティング）。物理ディレクトリ名は裏口として露出しない |
@@ -861,6 +896,30 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | XML-RPC 攻撃 | ファイルが存在しない — 一行も書いていない |
 | 権限昇格 | 静的 RBAC（`Gate::can()`・`permissions.php`） — 18権限 × 4ロール；所有権スコープのチェック；Super User は `.env` のみ |
 | Super User の DB 露出 | Super User は `.env` のみ；DB侵害でルート認証情報は得られない |
+
+### コードを変える管理画面の操作
+
+プラグインとテーマのインストール・更新・削除と、データベースのアップグレードは、SSH と CLI で行うのが推奨です。管理画面からのこれらの操作は**既定で無効**です。
+許可するには、`.env` に「その日時まで許可する」日時を `APP_TIMEZONE` で書きます。
+
+```ini
+ALLOW_PLUGIN_INSTALL="2026-11-01 12:00"   # プラグインの ZIP アップロード・適用・前の版に戻す
+ALLOW_THEME_INSTALL="2026-11-01 12:00"    # テーマの ZIP アップロード・適用・前の版に戻す
+WEB_UPGRADE_UNTIL="2026-11-01 12:00"      # データベースのアップグレード（メンテナンス → アップグレード）
+```
+
+その時刻になると自動で閉じます。24時間より先の日時や読めない値は無視します（理由を管理画面に表示）。`ALLOW_PLUGIN_INSTALL=true` / `ALLOW_THEME_INSTALL=true`
+もインストールの2つの鍵を開けますが、閉じることがないので管理画面が警告します。`WEB_UPGRADE_UNTIL` は日時だけを受け付けます。
+鍵を開けられるのは `.env` を書き換えられる人（FTP か SSH）だけなので、管理画面のセッションを奪っただけでは開けられません。開いている鍵は管理画面の全ページに表示します。
+
+管理画面の外で変わったファイルは、管理画面の全ページのバナーと、そこからリンクする**変更されたファイル**の画面、`system:verify` に出ます。
+
+```ini
+PLUGIN_MODIFIED_ACTION=warn   # warn（既定）: 知らせるだけ / disable: 確認済みにするまでそのプラグインを止める
+INTEGRITY_MAIL=true           # 新しい所見ごとに Super User へ1回メールする
+```
+
+変わったプラグインのファイルが PHP として読めない場合は、設定にかかわらずそのプラグインを止めます。確認済みにすると、その時点のファイルを記録します。
 
 ### コンテンツセキュリティポリシー（CSP）
 
@@ -926,6 +985,25 @@ EMBED_HOSTS="www.youtube-nocookie.com,player.vimeo.com"  # frame-src
 
 フック・ルート・`template_route` の `file` は、そのプラグインのディレクトリ内にある `.php` ファイルに限ります。それ以外のパスは `plugins:rebuild` のときに読み飛ばします（PHP のエラーログに警告を出します）。
 
+### インストールと更新
+
+プラグインのインストールと更新は3段階です。入口は ZIP のアップロード（**管理画面 → プラグイン管理**）と、FTP か SSH で `plugins/_incoming/{id}/` に置いたフォルダの2つです。
+
+1. **取り込み** — パッケージを検査し（エントリ・拡張子・サイズ・署名）、`storage/` に複写します。この時点では何も動きません。
+2. **確認** — 何が変わるかを出します。版・作者・署名・フックとルートの増減・ファイルの差分・PHP の構文エラー、それにコードがしていること
+   （コマンドの実行・実行時に決まる読み込み・通信・ファイルの書き込みなど）で、インストール済みの版から増えたものを先頭に出します。
+   スキャナは確認のための手がかりで、マルウェアの検査ではなく、何も止めません。
+3. **適用** — インストール済みの版を `storage/plugins/backup/` へ移し、新しい版を置きます。有効なプラグインなら、インストール用の SQL を
+   もう一度実行します。それか再構築が失敗したら、前の版に戻します。**戻す: vN** で退避した版と入れ替えられ、途中で打ち切られた操作
+   （タイムアウト・ブラウザを閉じた）は**修復する**（`plugins:repair`）で完了させるか取り消します。
+
+フォルダ名と `id` が違う、`id` が `hbp-` で始まる（本体と一緒に更新する同梱プラグインの予約）、ファイルが PHP として読めない、のいずれかなら拒否します。
+作者が違う・署名鍵が違う・版が新しくない、のいずれかは確認画面での明示の同意が要ります。CLI では `php core/cli.php plugins:apply {id}`。
+ファイルを `plugins/{id}/` に直接複写することもできますが、確認を通りません。有効なプラグインなら、次の確認で「管理画面の外で変わった」と出ます。
+
+ZIP でアップロードしたテーマも、同じ取り込み → 確認 → 適用を通り、前の版を**戻す: vN**（`themes:rollback`）のために残し、修復（`themes:repair`）できます。
+`default` は予約です。
+
 ### 静的な HTML 断片（snippets）
 
 プラグインは、全公開ページの `<head>` 内と `<body>` 末尾に固定の HTML を足せます。
@@ -984,12 +1062,20 @@ class MyPlugin
 | `before_comment_create` | コメントコントローラ、DB INSERT 前 |
 | `before_contact_send` | 問い合わせフォームプラグイン、`mb_send_mail()` 前 |
 | `post_saved` | 記事・固定ページの保存の最後、全キャッシュの再生成後（通知のみ。保存は取り消せない） |
+| `content_render` | 記事・固定ページの本文を描画するとき — 保存・編集画面のプレビュー・`posts:recompile` — Markdown を HTML にした後・サニタイザの前（フィルター） |
+
+例外を投げたリスナは読み飛ばして記録し（**管理画面 → プラグイン管理**に出る）、処理は続きます。HayabusaPress が発火しないイベントへのフックは、`plugins:rebuild` のときに警告になります。
+
+`content_render` は `html`（書き換える）・`markdown`・`post_id`（保存前のプレビューでは null）・`type`・`lang`・`raw_html_allowed` を受け取ります。
+足したものは記事自身の信頼度でサニタイズされるので、スクリプトを許されていない記事にスクリプトを足すことはできません。同じ本文なら同じ HTML を
+返すこと（時刻・乱数・通信・データベースへの書き込みなし、`exit` なし）。プレビューと `posts:recompile` が何度も呼ぶためです。結果は記事と一緒に
+保存されるので、このプラグインを有効・無効にしても、既存の記事に反映されるのは `posts:recompile`（または**メンテナンス → アップグレード → 記事の再生成**）の後です。
 
 ### 同梱プラグイン
 
 | プラグイン | ライセンス | 説明 |
 |---|---|---|
-| `hbp-helloworld` | AGPL-3.0-or-later | 最小ルートプラグイン — 3分チュートリアル兼スキャフォールド |
+| `hbp-helloworld` | AGPL-3.0-or-later | 最小ルートプラグイン — 3分チュートリアル兼スキャフォールド。`content_render` フィルターの参照実装も兼ねる（`[[hello]]` だけの行を挨拶にする） |
 | `hbp-contact` | AGPL-3.0-or-later | 問い合わせフォーム：DB INSERT なし、Super User メールへ直接 `mb_send_mail()` |
 | `hbp-antispam` | AGPL-3.0-or-later | 3層防御：ハニーポット → DNS-BL（UDP・タイムアウト制御・fail-open）→ 外部API |
 | `hbp-badwords` | AGPL-3.0-or-later | `before_comment_create` と `before_contact_send` にフックする禁止語フィルタ |

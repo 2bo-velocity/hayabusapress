@@ -75,7 +75,9 @@ Every design decision answers one question: *can we pre-compute this so the fron
 | **Role-based access control** | Static RBAC matrix (`permissions.php`, zero DB queries). 4 staff roles (Administrator / Editor / Author / Contributor) + Super User, mapped across 18 fine-grained permissions (posts, comments, media, taxonomy, navigation, blocks, templates, links, maintenance, IP, plugins, themes, users, settings). |
 | **Native TOTP 2FA** | RFC 6238-compliant. Replay prevention (`tfa_last_step`), 5-strike session destruction, time-step reuse detection. |
 | **Manifest-based plugins** | `manifest.json` declares hooks. Hook registry pre-compiled and priority-sorted. No full plugin load per request. Static HTML snippets for `<head>` and the end of `<body>` are baked into the page cache — zero runtime cost. |
-| **zip-slip-safe installer** | `PluginInstaller` validates every ZIP entry, blocks symlinks + zip-bombs, optionally enforces Ed25519 signatures. |
+| **zip-slip-safe installer** | `PluginInstaller` validates every ZIP entry, blocks symlinks + zip-bombs, optionally enforces Ed25519 signatures (covering every file through `manifest.json` `"files"`). |
+| **Reviewed plugin & theme updates** | A new version is staged, reviewed (file diff, PHP syntax errors, what the code does) and only then applied. The installed version is kept for a one-step roll back; an interrupted update can be repaired. |
+| **Change detection** | Plugin files are compared with their last approved state and the core files with the release's own list (`core/release.files.php`), at admin login and on rebuilds — never per request. |
 | **Dual IP blocklist** | `blocked_ips` table blocks POST-type spam. `SITE_IP_DENYLIST` blocks page views via compiled array — zero DB hit. |
 | **Atom 1.0 + RSS 2.0 + JSON Feed** | Pre-compiled per-language feeds (`feed.atom.xml`, `feed.rss.xml`, `feed.json` — chosen by `FEED_FORMAT`). Generated at post publish — zero DB on serving. Autodiscovery `<link>` in every `<head>`. |
 | **Scheduled publishing** | `status='scheduled'` + `published_at` (UTC). Fires via pseudo-cron (default, **zero impact on the FPC fast path** — one integer compare), OS cron, or a manual `/cron` endpoint. `published_at` is the single source of truth for post date. |
@@ -171,6 +173,29 @@ raw HTML (from the author's current role) and fills the generated description an
 Upgrading to **1.5.0** (`V001005000`) likewise adds `php core/cli.php posts:recompile` between 3 and 4: it
 fills in the character count and reading time of every existing post (series start empty, so nothing
 else needs backfilling).
+
+Upgrading to **1.6.0** changes no schema (`SCHEMA_VERSION` stays `V001005000`), so `db:migrate` has
+nothing to do; run step 4 (`system:init`) and nothing else. The first `system:init` (or the first admin
+login) after the upgrade records the current plugin files as approved, for the change detection.
+
+#### Without SSH
+
+Upload the new files over FTP, then open **Admin → Maintenance → Upgrade**. It walks through the same
+steps in the browser:
+
+1. **Checks** — PHP version and extensions, writable folders, that `storage/upload/` and `plugins/_incoming/`
+   cannot be fetched over HTTP, the database connection. A failed check blocks the database step.
+2. **Opcode cache** — clears PHP's compiled code (`opcache_reset()` in the web server's PHP). On hosts with
+   `opcache.validate_timestamps=0` the old code keeps running after an upload until this is done; a CLI
+   cannot reach the web server's cache.
+3. **Database** — applies pending migrations. Needs `WEB_UPGRADE_UNTIL` open in `.env` (below), the password
+   confirmed again, and a tick that a database backup was taken.
+4. **Posts** — re-renders every post in batches of 200 (the `posts:recompile` of the release notes), within
+   PHP's time limit; it can carry on after an interruption.
+5. **Caches** — the same as **Rebuild all caches** (`system:init`).
+
+SSH and the CLI remain the recommended way: the browser steps that change the schema are off unless you
+open them in `.env` for a limited time.
 
 > **Step 4 varies by release.** Some schema changes need denormalized data backfilled before the site
 > reads correctly again — `tags:reindex` (post_tags listing keys) and `counters:rebuild`
@@ -343,7 +368,7 @@ per-category feeds under `/feeds/{lang}/category/`.
 | `tool:key` | Generate a `base64:`-encoded `APP_KEY` for HMAC and encryption |
 | `tool:hash "pw"` | Generate a bcrypt/argon2id hash for `SUPER_USER_PASSWORD_HASH` |
 | `db:install` | **New installs.** Apply `schema.{driver}.sql` (full schema + seed) whose trailing baseline INSERT records `V001000000` — the DB is immediately "up to date" |
-| `db:migrate` | **Upgrades.** Apply only `V…` not yet in `schema_migrations`, ascending, forward-only; record each with real SHA-256 |
+| `db:migrate` | **Upgrades.** Apply only `V…` not yet in `schema_migrations`, ascending, forward-only; record each with real SHA-256. One run at a time (a lock shared with the admin panel's upgrade). A statement that fails stops it with exit code 1, and that migration is not recorded: on PostgreSQL it is rolled back as a whole, on MySQL the statements before it stay applied. Fix the cause and run it again |
 | `db:status` | Report: **DB version vs. `SCHEMA_VERSION` (code) vs. driver**, list pending migrations + the command to run, verify checksums (skips `BASELINE`) |
 
 ### Cache & Build
@@ -353,10 +378,20 @@ per-category feeds under `/feeds/{lang}/category/`.
 | `system:init` | Compile all caches: routes, menus, categories, tags, sidebars, SEO, plugins, author singleton, security headers |
 | `plugins:rebuild` | Recompile plugin registry + priority-sorted hook map; sync routes |
 | `plugins:checksums {dir\|id}` | Write the SHA-256 of every file into `manifest.json` `"files"`, for a package to be signed (`REQUIRE_SIGNED_PLUGINS`) |
+| `plugins:apply {id} [--yes] [--accept=author,signer,version]` | Review `plugins/_incoming/{id}/` in the terminal and apply it; the installed version is kept as the backup. `--accept` gives the consents the review asks for |
+| `plugins:rollback {id} [--yes]` | Go back to the kept previous version of a plugin (the database is not rolled back) |
+| `plugins:repair [id]` | Finish or undo a plugin operation that was interrupted (no id: list them) |
+| `plugins:status` | Every plugin with what the last rebuild skipped, files changed outside the admin panel, and errors it raised |
+| `plugins:ack {id}` | Accept the current files of a plugin that changed outside the admin panel (refused while a file has a PHP syntax error) |
+| `plugins:scan {dir\|id}` | What a plugin's code does — a guide for reviewing it, not a malware scan |
+| `themes:rollback {name} [--yes]` | Go back to the kept previous version of a theme |
+| `themes:repair [name]` | Finish or undo a theme operation that was interrupted (no name: list them) |
+| `system:verify [--ack]` | Check plugin and core files for changes made outside the admin panel; exit code 1 when something differs (usable from cron). `--ack` accepts every current difference |
+| `release:files --list=FILE` | Write `core/release.files.php` (the SHA-256 of every distributed file). Used by the release script; not needed on a site |
 | `lang:rebuild [locale]` | Delete MUI view caches for a locale (or all locales) to force re-bake |
 | `assets:rebuild` | Purge all FPC + view caches + recompile CSP hashes after theme CSS/JS edits |
 | `authors:rebuild` | Rebuild `authors.cache.php` + purge affected post FPCs |
-| `posts:recompile [--reassess [--user=ID]]` | Re-run Markdown → HTML + sanitizer on all posts with the raw-HTML trust recorded on each (use after updating sanitizer rules, `SPONSORED_NOTICE_TEXT`, a speaker, or a post a card points to). Also refreshes the generated description and share text, and recounts characters and reading time. `--reassess` first resets that trust from the current role of whoever last saved each body (`--user=ID` limits it to one saver; `0` = Super User) |
+| `posts:recompile [--reassess [--user=ID]]` | Re-run Markdown → HTML + sanitizer on all posts with the raw-HTML trust recorded on each (use after updating sanitizer rules, `SPONSORED_NOTICE_TEXT`, a speaker, or a post a card points to). Also refreshes the generated description and share text, and recounts characters and reading time. `--reassess` first resets that trust from the current role of whoever last saved each body (`--user=ID` limits it to one saver; `0` = Super User). A post that fails to render is listed and skipped (exit code 1); a post saved by an editor while it runs is left as the editor saved it |
 | `blocks:rebuild` | Recompile `blocks.cache.php` (reusable blocks) and purge all FPC |
 | `links:rebuild` | Recompile `links.cache.php` (the `/go/` alias table) |
 | `media:gc [--days=N]` | Garbage-collect orphan draft media in `storage/upload/` not referenced by any `attachments` row, older than N days (default 7). Walks the `{ab}/{cd}/` shard tree |
@@ -367,7 +402,7 @@ per-category feeds under `/feeds/{lang}/category/`.
 | `posts:publish-due` | Promote `scheduled` posts whose `published_at` has arrived (cron / manual trigger) |
 | `schedule:recompile` | Recompute `next_schedule.php` (the next pseudo-cron fire time) |
 
-> **No SSH?** The **Admin → Maintenance** page runs the same regeneration from the browser — rebuild sitemap, feeds, plugins, or **all caches** (equivalent to `system:init`). Requires the `maintenance:run` permission (Administrator or Super User; see Roles & Permissions). Ideal for shared hosting where the CLI is unavailable.
+> **No SSH?** The **Admin → Maintenance** page runs the same regeneration from the browser — rebuild sitemap, feeds, plugins, or **all caches** (equivalent to `system:init`) — and **Maintenance → Upgrade** covers `db:migrate` and `posts:recompile` (see [Option C](#option-c--upgrade-an-existing-installation)). Requires the `maintenance:run` permission (Administrator or Super User; see Roles & Permissions). Ideal for shared hosting where the CLI is unavailable.
 
 ### Security Operations
 
@@ -852,13 +887,15 @@ The full schema files always describe the latest version and record every diff a
 | Stored XSS | DOM allowlist sanitizer (`ext-dom`) at save time + `{{ }}` auto-escape in templates. Ruby/bouten markup compiles to `<ruby>`/`<em class=hbp-bouten>` with attribute values allowlisted |
 | CSRF | `Security::csrfField()` in **every** admin POST form — including the login and 2FA screens (soft-verified: a token mismatch re-renders the form instead of a hard 403) + `SameSite=Lax` cookies |
 | Input validation | Server-side validation on all admin save paths, derived from the schema's own constraints: enum allowlists (`type`, `status`, `role`, menu/sidebar locations, widget keys), `VARCHAR(n)` length caps, required `NOT NULL` fields, and `UNIQUE` collisions caught instead of surfacing a 500. Menu/SNS URLs are restricted to `http(s)`/relative schemes (no `javascript:`), and emails are format-checked |
-| Brute-force login | `auth_throttle`: exponential backoff per IP + per account; UI shows lockout countdown |
+| Brute-force login | `auth_throttle`: 5 failures per account or 30 per IP within 15 minutes lock it, with exponential backoff (up to an hour); the UI shows the countdown. Password re-confirmation counts toward the same limit |
+| Stolen admin session | Installing, updating and rolling back plugins and themes, and upgrading the database from the browser, need a switch opened in `.env` for a limited time (off by default — see below) **and** the password (plus the 2FA code) confirmed again; deleting a plugin or theme needs the password. A confirmation lasts 10 minutes |
+| Tampered files | Change detection: plugin files against their last approved state, core files against `core/release.files.php`, and `.php` files the release does not have under `core/`, `public/` and `themes/default/`. Checked at admin login and on rebuilds; shown on every admin page and mailed once to the Super User. It lets you notice — whoever can write the files can also rewrite the records |
 | 2FA replay | `users.tfa_last_step` prevents same time-step reuse (RFC 6238) |
 | 2FA brute-force | 5 failures destroy the temporary auth session |
 | Session fixation | `session_regenerate_id(true)` on every successful login |
 | Timing attacks | Dummy-hash verification when user not found; uniform response time |
 | Path traversal (media) | `basename()` + extension allowlist on all uploads |
-| Path traversal (plugin ZIP) | `PluginInstaller` validates every entry — `../`, absolute paths, symlinks, and zip-bombs rejected |
+| Path traversal (plugin ZIP) | `PluginInstaller` validates every entry — `../`, absolute paths, symlinks, and zip-bombs rejected. Plugin and theme folders are copied, moved and deleted without ever following a symbolic link |
 | Comment spam | Honeypot field + `before_comment_create` hook pipeline + IP blocklist |
 | CSP bypass | Pre-compiled hash-based CSP; `report-only` → `enforce` staged rollout |
 | Admin panel discovery | `ADMIN_PATH` in `.env` to obscure the login URL — any value works (front-controller routing); the physical directory name is not exposed as a back door |
@@ -868,6 +905,34 @@ The full schema files always describe the latest version and record every diff a
 | XML-RPC attacks | File does not exist — not a single line of code |
 | Privilege escalation | Static RBAC (`Gate::can()`, `permissions.php`) — 18 permissions × 4 roles; ownership-scoped checks; Super User via `.env` only |
 | Super User DB exposure | Super User is `.env`-only; DB compromise cannot yield root credentials |
+
+### Admin Operations That Change Code
+
+The recommended way to install, update or remove plugins and themes and to upgrade the database is SSH and
+the CLI. From the admin panel these operations are **off by default**. To allow one, write in `.env` the date
+and time until which it is allowed, in `APP_TIMEZONE`:
+
+```ini
+ALLOW_PLUGIN_INSTALL="2026-11-01 12:00"   # plugin ZIP upload, apply, roll back
+ALLOW_THEME_INSTALL="2026-11-01 12:00"    # theme ZIP upload, apply, roll back
+WEB_UPGRADE_UNTIL="2026-11-01 12:00"      # database upgrade (Maintenance → Upgrade)
+```
+
+The switch closes by itself at that time; a date more than 24 hours ahead, or a value that cannot be read,
+is ignored (the admin panel says why). `ALLOW_PLUGIN_INSTALL=true` / `ALLOW_THEME_INSTALL=true` still open
+the two install switches but never close, and the admin panel warns about them; `WEB_UPGRADE_UNTIL` takes a
+date only. Only someone who can write `.env` (FTP or SSH) can open a switch, so a stolen admin session
+cannot. Every admin page shows which switches are open.
+
+Files changed outside the admin panel are reported in a banner on every admin page, on the **Changed files** screen it links to, and by `system:verify`:
+
+```ini
+PLUGIN_MODIFIED_ACTION=warn   # warn (default): report only; disable: keep a changed plugin out until accepted
+INTEGRITY_MAIL=true           # mail the Super User once about each new finding
+```
+
+A changed plugin file that does not parse always keeps its plugin out, whatever the setting. Accepting a
+change records the files as they are now.
 
 ### Content Security Policy
 
@@ -933,6 +998,32 @@ Without this file, the admin panel falls back to Tailwind Play CDN (development 
 
 The `file` of a hook, a route or a `template_route` must be a `.php` file inside the plugin's own directory. Any other path is skipped at `plugins:rebuild` (with a warning in the PHP error log).
 
+### Installing & Updating
+
+A plugin is installed or updated in three steps, from a ZIP upload (**Admin → Plugins**) or from a folder
+put in `plugins/_incoming/{id}/` over FTP or SSH:
+
+1. **Stage** — the package is checked (entries, extensions, size, signature) and copied into `storage/`;
+   nothing runs yet.
+2. **Review** — what would change: version, author, signature, hooks and routes added or removed, the file
+   diff, PHP syntax errors, and what the code does (running commands, run-time includes, network, file
+   writes, …) with what is new since the installed version brought forward. The scanner is a guide for
+   the review, not a malware scan, and it blocks nothing.
+3. **Apply** — the installed version is moved to `storage/plugins/backup/` and the new one put in place; if
+   the plugin is active its install SQL runs again. If that or the rebuild fails, the previous version is
+   put back. **Back to vN** swaps in the kept version; an operation cut short (timeout, closed browser) is
+   finished or undone with **Repair** (`plugins:repair`).
+
+A package is refused when its folder name differs from its `id`, when the `id` starts with `hbp-` (reserved
+for the bundled plugins, which are updated with HayabusaPress), or when a file does not parse. A different
+author, a different signing key, or a version that is not newer needs an explicit consent on the review.
+From the CLI: `php core/cli.php plugins:apply {id}`. Copying files straight into `plugins/{id}/` also works,
+but it bypasses the review: for an active plugin, the next check reports it as changed outside the admin
+panel.
+
+Themes uploaded as ZIP go through the same stage → review → apply, keep the previous version for
+**Back to vN** (`themes:rollback`), and can be repaired (`themes:repair`). `default` is reserved.
+
 ### Static Snippets
 
 A plugin can add fixed HTML to the `<head>` or the end of `<body>` on every public page:
@@ -991,12 +1082,23 @@ class MyPlugin
 | `before_comment_create` | Comment controller, before DB insert |
 | `before_contact_send` | Contact form plugin, before `mb_send_mail()` |
 | `post_saved` | End of a post/page save, after every cache is rebuilt (notification only — cannot cancel the save) |
+| `content_render` | When a post or page body is rendered — on save, in the editor's preview, and in `posts:recompile` — after Markdown becomes HTML and before the sanitizer (filter) |
+
+A listener that throws is skipped and logged (**Admin → Plugins** shows it); the request goes on. A hook on
+an event HayabusaPress does not fire produces a warning at `plugins:rebuild`.
+
+`content_render` receives `html` (rewrite it), `markdown`, `post_id` (null for an unsaved preview), `type`,
+`lang` and `raw_html_allowed`. What it adds is sanitized with the post's own trust, so it cannot add a script
+to a post that may not have one. The same body must give the same HTML — no time, randomness, network or
+database writes, and no `exit` — because the preview and `posts:recompile` run it again. Its result is stored
+with the post: turning such a plugin on or off reaches existing posts only after `posts:recompile` (or
+**Maintenance → Upgrade → Re-render the posts**).
 
 ### Bundled Plugins
 
 | Plugin | License | Description |
 |---|---|---|
-| `hbp-helloworld` | AGPL-3.0-or-later | Minimal route plugin — 3-minute tutorial and scaffold |
+| `hbp-helloworld` | AGPL-3.0-or-later | Minimal route plugin — 3-minute tutorial and scaffold. Also the reference `content_render` filter (a line holding only `[[hello]]` becomes a greeting) |
 | `hbp-contact` | AGPL-3.0-or-later | Contact form: no DB INSERT, direct `mb_send_mail()` to Super User email |
 | `hbp-antispam` | AGPL-3.0-or-later | 3-layer defense: honeypot → DNS-BL (UDP, timeout-controlled, fail-open) → external API |
 | `hbp-badwords` | AGPL-3.0-or-later | Bad-word filter hooked into `before_comment_create` and `before_contact_send` |

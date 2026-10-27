@@ -19,4 +19,5 @@ return [
     'hbp-contact.invalid_email' => 'メールアドレスの形式が正しくありません。',
     'hbp-contact.too_long'      => 'メッセージが長すぎます（10,000 文字まで）。',
     'hbp-contact.failed'        => '送信に失敗しました。しばらくしてからお試しください。',
+    'hbp-contact.csrf'          => '有効期限が切れました。もう一度送信してください。',
 ];

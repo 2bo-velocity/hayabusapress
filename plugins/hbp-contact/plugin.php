@@ -52,6 +52,23 @@ class HbpContactPlugin
                 exit;
             }
 
+            // CSRF: the form carries the session's token (Security::csrfField()). Checked after the rate
+            // limit, so a flood of forged posts still counts, and before anything else runs. A mismatch
+            // shows the form again with what was typed, as the admin login does, rather than a bare 403:
+            // the usual cause is a session that expired while the visitor was writing.
+            if (!Security::checkCsrfToken(is_string($_POST['_csrf_token'] ?? null) ? $_POST['_csrf_token'] : '')) {
+                $str          = static fn($v): string => is_string($v) ? $v : '';
+                $inputName    = mb_substr(trim($str($_POST['contact_name']    ?? '')), 0, 100);
+                $inputEmail   = mb_substr(trim($str($_POST['contact_email']   ?? '')), 0, 255);
+                $inputMessage = mb_substr(trim($str($_POST['contact_message'] ?? '')), 0, 10000);
+                $error        = $dict['hbp-contact.csrf'] ?? 'Your session expired. Please send the form again.';
+                $_POST        = [];   // nothing below may act on this request
+            }
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && $error === '') {
+            $clientIp = class_exists('AccessControl') ? AccessControl::clientIp() : ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
+
             // Fire the before_contact_send hook (automatic integration with anti-spam, etc.)
             $sendContext = [
                 'post_data'  => &$_POST,
@@ -80,6 +97,9 @@ class HbpContactPlugin
                         $method,
                         $e->getMessage()
                     ));
+                    if (class_exists('PluginErrors')) {
+                        PluginErrors::record(PluginErrors::pluginOfFile($hook['file']) ?? '?', 'before_contact_send', $e->getMessage());
+                    }
                 }
             }
 
@@ -137,6 +157,8 @@ class HbpContactPlugin
         $sidebarRight = SidebarCompiler::loadSidebar('sidebar_right', $lang);
         $sidebarLeft  = SidebarCompiler::loadSidebar('sidebar_left', $lang);
 
+        // The form carries this visitor's CSRF token: no shared cache (CDN, proxy) may keep the page
+        header('Cache-Control: private, no-store');
         View::render('plugin/hbp-contact/contact', compact(
             'lang', 'defaultLang', 'siteName', 'siteUrl',
             'menus', 'seoHead', 'seoGlobal', 'seoMeta',

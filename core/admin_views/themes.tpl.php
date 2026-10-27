@@ -10,9 +10,27 @@
 {% if ($_GET['rebuilt'] ?? '') === '1' %}<div class="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 text-sm">{@ theme_rebuilt_ok @}</div>{% endif %}
 {% if $_GET['error'] %}<div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 text-sm">{{ $_GET['error'] }}</div>{% endif %}
 
+{% if $_GET['applied'] %}<div class="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 text-sm">{@ theme_applied_ok @} {{ $_GET['applied'] }}</div>{% endif %}
+{% if ($_GET['rolledback'] ?? '') === '1' %}<div class="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 text-sm">{@ plugin_rolled_back_ok @}</div>{% endif %}
+{% if $_GET['notice'] %}<div class="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 text-sm">{{ $_GET['notice'] }}</div>{% endif %}
+{% foreach $interrupted as $jname => $journal %}
+<div class="mb-4 p-4 rounded-2xl border border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-950/40 text-sm text-rose-800 dark:text-rose-200">
+    <p class="font-medium">{@ theme_interrupted @} <code>{{ $jname }}</code> ({{ $journal['op'] }} · {{ $journal['started_at'] }})</p>
+    <p class="mt-1 text-xs">{@ plugin_interrupted_desc @} <code>php core/cli.php themes:repair {{ $jname }}</code></p>
+    <form method="post" action="/{{ $adminPath }}/theme/repair" class="mt-2">
+    {{{ Security::csrfField() }}}
+        <input type="hidden" name="name" value="{{ $jname }}">
+        <button type="submit" class="text-sm px-4 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-medium transition-colors">{@ plugin_repair_btn @}</button>
+    </form>
+</div>
+{% endforeach %}
+
+{% include 'admin/_reauth' %}
+
 <!-- ZIP upload -->
 <div class="mb-6 bg-white dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-4">
     <h3 class="font-medium text-sm mb-3">{@ theme_install_zip @}</h3>
+    {% if $installGate['open'] %}
     <form method="post" action="/{{ $adminPath }}/theme/install" enctype="multipart/form-data" class="flex items-center gap-3">
     {{{ Security::csrfField() }}}
         <input type="file" name="zip" accept=".zip" required class="text-sm flex-1 min-w-0">
@@ -21,6 +39,9 @@
         </button>
     </form>
     <p class="text-xs text-slate-400 mt-2">{@ theme_install_note @}</p>
+    {% else %}
+    {% include 'admin/_install_gate' %}
+    {% endif %}
 </div>
 
 <!-- Theme list -->
@@ -50,6 +71,13 @@
                 </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
+                {% if $backups[$name] %}
+                <form method="post" action="/{{ $adminPath }}/theme/rollback" onsubmit="return confirm('{@ theme_rollback_confirm @}')">
+    {{{ Security::csrfField() }}}
+                    <input type="hidden" name="name" value="{{ $name }}">
+                    <button type="submit" title="{{ $backups[$name]['backed_up_at'] }}" class="text-sm px-3 py-1.5 rounded-xl font-medium bg-slate-100 dark:bg-slate-800 text-slate-500 hover:bg-amber-50 hover:text-amber-700 transition-colors">{@ plugin_rollback_btn @} v{{ $backups[$name]['version'] }}</button>
+                </form>
+                {% endif %}
                 {% if $theme['active'] %}
                 <form method="post" action="/{{ $adminPath }}/theme/rebuild">
     {{{ Security::csrfField() }}}

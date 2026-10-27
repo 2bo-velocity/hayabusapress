@@ -13,7 +13,14 @@
             "method": "renderPage"
         }
     },
-    "hooks": {},
+    "hooks": {
+        "content_render": {
+            "file": "/plugins/hbp-helloworld/plugin.php",
+            "class": "HbpHelloworldPlugin",
+            "method": "greet",
+            "priority": 10
+        }
+    },
     "snippets": {
         "head": "snippets/head.html"
     }

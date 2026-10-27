@@ -13,3 +13,20 @@ public/robots.txt
 public/sitemap.xml
 public/assets/themes/*
 !public/assets/themes/.gitkeep
+storage/logs/*.log
+# Plugin installation state (1.6.0): what is applied, the kept previous versions, interrupted operations
+storage/plugins/state.php
+storage/plugins/installed.php
+storage/plugins/backup/
+storage/plugins/.journal/
+storage/plugins/.lock
+storage/plugins/integrity.php
+# Theme installation state (1.6.0): the kept previous versions, interrupted operations
+storage/themes/backup/
+storage/themes/.journal/
+storage/themes/.lock
+# Results of the check for files changed outside the admin panel
+storage/integrity/
+# Plugin folders waiting to be reviewed and applied (only the explanation is part of the package)
+plugins/_incoming/*
+!plugins/_incoming/README.txt

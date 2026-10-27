@@ -148,6 +148,19 @@ class YourPluginClass
 | `before_comment_create` | コメント受付コントローラーのDB接続前 | `post_data`, `ip_address` |
 | `before_contact_send` | お問い合わせプラグインのメール送出前 | `post_data`, `ip_address` |
 | `post_saved` | 記事・固定ページの保存の最後（DB確定・キャッシュ再生成の後）。遮断できない通知 | `post_id`, `type`, `lang`, `slug`, `status`, `is_new`, `series_id`（1.5.0〜。連載外・固定ページは `null`） |
+| `content_render` | 記事・固定ページの本文の描画（保存・編集画面のプレビュー・`posts:recompile`）。Markdown を HTML にした後・サニタイザの前に呼ばれるフィルター | `html`（書き換える）, `markdown`, `post_id`（保存前のプレビューでは `null`）, `type`, `lang`, `raw_html_allowed` |
+
+- 例外を投げたリスナは読み飛ばされ、管理画面のプラグイン画面にエラーとして出る。処理（コメントの受付・保存など）は続く。
+- HayabusaPress が発火しないイベント名にフックすると、`plugins:rebuild` のときに警告になる（打ち間違いに気づくため）。
+
+### `content_render` の規約
+
+- 書き換えるのは `$context['html']` だけ。足した HTML は記事自身の信頼度でサニタイズされるので、生 HTML を許されていない記事にスクリプトは足せない。
+- **同じ本文なら同じ HTML を返す。** 時刻・乱数・外部通信・DB への書き込みに出力を依存させない（プレビューと `posts:recompile` が何度も呼ぶ）。DB の読み取りは保存時なので構わない。
+- `exit` / `die` を使わない（保存の処理ごと止まる）。
+- 結果は `content_html` に保存されて FPC から配信される。プラグインを有効・無効・更新しても、既存の記事に反映されるのは `posts:recompile` の後。
+- 例外を投げたり `html` を文字列以外にしたりしたリスナは読み飛ばされ、HTML はそのリスナを呼ぶ前のまま続く。
+- 参照実装は `hbp-helloworld` の `greet()`（`[[hello]]` だけの行を挨拶にする）。
 
 ---
 
@@ -186,25 +199,34 @@ class HbpMyPlugin { ... }
 
 ## インストール方法
 
-### 手動インストール
+インストールと更新は、どちらも「取り込み → 確認 → 適用」を通る。取り込みでは何も動かず、確認で版・作者・署名・フックとルートの増減・ファイルの差分・PHP の構文エラー・コードがしていること（スキャナ）を見せ、適用でインストール済みの版を `storage/plugins/backup/` に退避してから差し替える。
 
-1. `plugins/your-plugin-name/` ディレクトリを作成
-2. `manifest.json` と実装ファイルを配置
-3. `php core/cli.php plugins:rebuild` を実行
+### SSH / FTP（推奨）
+
+1. プラグインのフォルダを `plugins/_incoming/your-plugin-name/` に置く（`plugins/` に直接ではなく）
+2. `php core/cli.php plugins:apply your-plugin-name` で確認して適用する（SSH が無ければ、管理画面の「プラグイン管理」の「plugins/_incoming/ で待っているもの」から確認・適用）
+3. 戻すときは `php core/cli.php plugins:rollback your-plugin-name`
 
 ### ZIPインストール
 
-管理画面の「プラグイン管理」からZIPファイルをアップロード。
-ZIPの構造は `your-plugin-name/manifest.json` が存在すること（パストラバーサル防御のため）。
-中に置けるファイルの拡張子は `php` `json` `md` `txt` `html` `css` `js` `svg` `png` `jpg` `webp` のみ。拡張子のないファイルは `LICENSE` `LICENCE` `COPYING` `NOTICE` `README` `CHANGELOG` `AUTHORS` の名前に限って置ける。
+管理画面の「プラグイン管理」からZIPファイルをアップロードすると、確認画面が開く。`.env` の `ALLOW_PLUGIN_INSTALL` に期限の日時を書いて開いておく必要があり、適用の前にパスワードをもう一度確認する。
+ZIPの構造は `your-plugin-name/manifest.json` が存在すること（パストラバーサル防御のため）。**フォルダ名と `manifest.json` の `id` は同じにすること**（違えば拒否）。`hbp-` で始まる ID は同梱の公式プラグイン用で使えない。
+中に置けるファイルの拡張子は `php` `json` `md` `txt` `html` `css` `js` `svg` `png` `jpg` `webp` のみ。拡張子のないファイルは `LICENSE` `LICENCE` `COPYING` `NOTICE` `README` `CHANGELOG` `AUTHORS` の名前に限って置ける。ほかに、署名 `manifest.json.sig` と、データベースの SQL `database/{install,uninstall}.{mysql,pgsql}.sql` を、その名前と場所に限って置ける。
+
+### 配布する作者へ
+
+- **更新では `version` を上げ、`author` と署名の鍵を変えない。** 版が新しくない・作者が違う・前の版を署名した鍵で署名されていない更新は、確認画面で利用者の明示の同意が要る。
+- 公開する前に `php core/cli.php plugins:scan your-plugin-name` で、スキャナが利用者に何を見せるかを確かめる（コマンドの実行・実行時に決まる読み込み・通信・ファイルの書き込みなど）。マルウェアの検査ではなく、利用者がプラグインを確かめるための手がかり。思い当たる理由のある所見は README に書いておくとよい。
+- 署名付きで配布するなら、最後に `php core/cli.php plugins:checksums your-plugin-name` で全ファイルの SHA-256 を `manifest.json` の `"files"` に書き、`manifest.json` に Ed25519 で署名して `manifest.json.sig` に置く（手順は https://hayabusapress.org/ja/docs/extend/writing-a-plugin ）。
+- PHP の構文エラーがある版は適用できない。
 
 ---
 
 ## 管理画面での有効化・無効化
 
-管理画面 → プラグイン管理 → 「有効化」または「無効化」ボタンをクリック。
+管理画面 → プラグイン管理 → 「有効化」または「無効化」ボタンをクリック。有効化は、その時点のファイルを承認済みとして記録する（以後、管理画面の外でファイルが変わると改ざん検知が知らせる）。
 
-または CLI:
+ファイルを直接編集した後のレジストリの作り直しは CLI でも行える:
 ```bash
 php core/cli.php plugins:rebuild
 ```
@@ -215,7 +237,7 @@ php core/cli.php plugins:rebuild
 
 | プラグイン | 説明 |
 |---|---|
-| `hbp-helloworld` | 最小構成のチュートリアルプラグイン（独自ルートと静的ページ断片の例。雛形として自由に流用可） |
+| `hbp-helloworld` | 最小構成のチュートリアルプラグイン（独自ルート・静的ページ断片・`content_render` フィルターの例。雛形として自由に流用可） |
 | `hbp-antispam` | 3層ハイブリッドスパム防御（ハニーポット / DNS-BL / 外部API） |
 | `hbp-contact` | DBクエリゼロのお問い合わせフォーム（MUI追従） |
 | `hbp-badwords` | NGワードフィルタ（事前コンパイル語彙・外部通信ゼロ） |

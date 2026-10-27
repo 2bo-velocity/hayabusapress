@@ -152,6 +152,24 @@ require_once CORE_PATH . '/Session.php';
 require_once CORE_PATH . '/Gate.php';
 require_once CORE_PATH . '/Crypto.php';
 require_once CORE_PATH . '/Auth.php';
+require_once CORE_PATH . '/Throttle.php';   // login / 2FA / password-confirmation rate limits (callers check class_exists)
+require_once CORE_PATH . '/Audit.php';
+require_once CORE_PATH . '/PluginErrors.php';
+
+// A fatal error (memory, a type error at compile time, a timeout) is not a Throwable and never
+// reaches the catch blocks around plugin code. When it happened in a plugin's file, put it in the
+// plugin error log too, so the plugins screen can say which plugin brought the request down.
+// Registered in every APP_ENV: it only records, the global handler above decides the output.
+register_shutdown_function(static function (): void {
+    $err = error_get_last();
+    if ($err === null || (($err['type'] & (E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR)) === 0)) {
+        return;
+    }
+    $plugin = PluginErrors::pluginOfFile((string)$err['file']);
+    if ($plugin !== null) {
+        PluginErrors::record($plugin, 'fatal', $err['message'] . ' @ ' . basename((string)$err['file']) . ':' . $err['line']);
+    }
+});
 require_once CORE_PATH . '/TwoFactorAuth.php';
 require_once CORE_PATH . '/Locale.php';
 require_once CORE_PATH . '/Security.php';

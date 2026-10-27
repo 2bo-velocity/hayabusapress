@@ -67,6 +67,9 @@ class CommentController
                     $hook['method'],
                     $e->getMessage()
                 ));
+                if (class_exists('PluginErrors')) {
+                    PluginErrors::record(PluginErrors::pluginOfFile($hook['file']) ?? '?', 'before_comment_create', $e->getMessage());
+                }
             }
         }
 

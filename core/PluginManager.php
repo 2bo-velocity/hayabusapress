@@ -33,6 +33,16 @@ class PluginManager
     public const SNIPPET_SLOTS   = ['head', 'body_end'];
     /** Upper bound per snippet file: a snippet is a fragment, not a page. */
     private const SNIPPET_MAX_BYTES = 65536;
+    /** Per-plugin state for the admin panel (compile warnings), keyed by directory name. */
+    private const STATE_FILE     = STORAGE_PATH . '/plugins/state.php';
+    /** The events the core and the bundled plugins fire. A hook on any other name never runs. */
+    public const EVENTS          = ['before_comment_create', 'before_contact_send', 'post_saved', 'content_render'];
+
+    /**
+     * Warnings found by the rebuild in progress: dir name => [[message key, params], ...].
+     * Messages are stored as keys so the admin panel shows them in the viewer's language.
+     */
+    private static array $warnings = [];
 
     /** @var array<string,string>|null request-local memo for snippet() */
     private static ?array $snippets = null;
@@ -52,19 +62,30 @@ class PluginManager
         $hooks        = [];
         $pluginRoutes = [];
         $snippets     = array_fill_keys(self::SNIPPET_SLOTS, []);
+        self::$warnings = [];
+        // Plugins whose files changed outside the admin panel and that the last check stopped
+        // (a file that does not parse, or PLUGIN_MODIFIED_ACTION=disable). active.php is not touched:
+        // acknowledging the change brings them back.
+        require_once CORE_PATH . '/Integrity.php';
+        $stopped = Integrity::disabledPlugins();
 
         $dirs = glob(self::PLUGINS_DIR . '/*/manifest.json') ?: [];
 
         foreach ($dirs as $manifestFile) {
             $dir  = dirname($manifestFile);
             $name = basename($dir);
+            if ($name[0] === '_') {
+                continue;   // plugins/_incoming/ and work directories are not plugins
+            }
 
             $json = file_get_contents($manifestFile);
-            if ($json === false) continue;
-            $meta = json_decode($json, true);
-            if (!is_array($meta)) continue;
+            $meta = $json === false ? null : json_decode($json, true);
+            if (!is_array($meta)) {
+                self::warn($name, 'pw_manifest_invalid', [], 'manifest.json is not valid JSON; the plugin was not loaded.');
+                continue;
+            }
 
-            $isActive = in_array($name, $active, true);
+            $isActive = in_array($name, $active, true) && !in_array($name, $stopped, true);
 
             $plugins[$name] = [
                 'id'            => $meta['id']            ?? $name,
@@ -87,6 +108,9 @@ class PluginManager
 
             // Hook compilation
             foreach ($meta['hooks'] ?? [] as $eventName => $hookDef) {
+                if (!in_array($eventName, self::EVENTS, true)) {
+                    self::warn($name, 'pw_unknown_event', ['event' => $eventName], "hook '{$eventName}' is not an event HayabusaPress fires; it never runs.");
+                }
                 $absFile = self::resolveCodeFile($dir, $hookDef['file'] ?? '');
                 if ($absFile === null) {
                     continue;
@@ -152,39 +176,48 @@ class PluginManager
 
         // plugins.cache.php (master registry: for the admin UI)
         $export = var_export($plugins, true);
-        file_put_contents(
-            self::PLUGINS_CACHE,
-            "<?php\n// HBP Plugin Registry - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n",
-            LOCK_EX
-        );
-        if (function_exists('opcache_invalidate')) {
-            @opcache_invalidate(self::PLUGINS_CACHE, true);   // see SidebarCompiler::forgetCompiled()
-        }
+        self::writeCache(self::PLUGINS_CACHE, 'HBP Plugin Registry', $export);
 
         // hooks.cache.php (sorted static hook registry: for runtime)
         $export = var_export($hooks, true);
-        file_put_contents(
-            self::HOOKS_CACHE,
-            "<?php\n// HBP Hook Registry - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n",
-            LOCK_EX
-        );
-        if (function_exists('opcache_invalidate')) {
-            @opcache_invalidate(self::HOOKS_CACHE, true);   // see SidebarCompiler::forgetCompiled()
-        }
+        self::writeCache(self::HOOKS_CACHE, 'HBP Hook Registry', $export);
 
         // plugin_routes.cache.php (static plugin routes + template route definitions)
         $export = var_export($pluginRoutes, true);
-        file_put_contents(
-            self::ROUTES_CACHE,
-            "<?php\n// HBP Plugin Routes - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n",
-            LOCK_EX
-        );
-        if (function_exists('opcache_invalidate')) {
-            @opcache_invalidate(self::ROUTES_CACHE, true);   // see SidebarCompiler::forgetCompiled()
-        }
+        self::writeCache(self::ROUTES_CACHE, 'HBP Plugin Routes', $export);
 
         self::compileSnippets($snippets);
         self::compileLanguagePacks($active);
+        self::writeState();
+    }
+
+    /**
+     * Per-plugin state for the admin panel: dir name => ['warnings' => [[key, params], ...]].
+     * Rebuilt by every rebuildCache(); empty before the first one.
+     */
+    public static function state(): array
+    {
+        if (!is_file(self::STATE_FILE)) {
+            return [];
+        }
+        $state = require self::STATE_FILE;
+        return is_array($state) ? $state : [];
+    }
+
+    /** Note a problem the rebuild skipped over: for the error log and for the plugins screen. */
+    private static function warn(string $plugin, string $key, array $params, string $logMessage): void
+    {
+        error_log("[HBP WARNING] plugin {$plugin}: {$logMessage}");
+        self::$warnings[$plugin][] = [$key, $params];
+    }
+
+    private static function writeState(): void
+    {
+        $state = [];
+        foreach (self::$warnings as $plugin => $list) {
+            $state[$plugin]['warnings'] = $list;
+        }
+        self::writeCache(self::STATE_FILE, 'HBP Plugin State', var_export($state, true));
     }
 
     /**
@@ -229,7 +262,7 @@ class PluginManager
         $path = realpath(ROOT_PATH . '/' . ltrim($relFile, '/'));
         if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR)
             || !is_file($path) || strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'php') {
-            error_log("[HBP WARNING] plugin file '{$relFile}' in " . basename($pluginDir) . ' is missing, not a .php file or outside the plugin directory -- skipped.');
+            self::warn(basename($pluginDir), 'pw_file_skipped', ['file' => $relFile], "plugin file '{$relFile}' is missing, not a .php file or outside the plugin directory -- skipped.");
             return null;
         }
         return $path;
@@ -240,11 +273,11 @@ class PluginManager
         $base = realpath($pluginDir);
         $path = realpath($pluginDir . '/' . ltrim($relFile, '/'));
         if ($base === false || $path === false || !str_starts_with($path, $base . DIRECTORY_SEPARATOR) || !is_file($path)) {
-            error_log("[HBP WARNING] plugin snippet '{$relFile}' in " . basename($pluginDir) . ' is missing or outside the plugin directory -- skipped.');
+            self::warn(basename($pluginDir), 'pw_snippet_skipped', ['file' => $relFile], "plugin snippet '{$relFile}' is missing or outside the plugin directory -- skipped.");
             return null;
         }
         if (filesize($path) > self::SNIPPET_MAX_BYTES) {
-            error_log("[HBP WARNING] plugin snippet '{$relFile}' in " . basename($pluginDir) . ' exceeds ' . self::SNIPPET_MAX_BYTES . ' bytes -- skipped.');
+            self::warn(basename($pluginDir), 'pw_snippet_too_big', ['file' => $relFile, 'max' => self::SNIPPET_MAX_BYTES], "plugin snippet '{$relFile}' exceeds " . self::SNIPPET_MAX_BYTES . ' bytes -- skipped.');
             return null;
         }
         $html = file_get_contents($path);
@@ -273,12 +306,7 @@ class PluginManager
         }
 
         $export = var_export($new, true);
-        $tmp    = self::SNIPPETS_CACHE . '.' . getmypid() . '.tmp';
-        file_put_contents($tmp, "<?php\n// HBP Plugin Snippets - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n", LOCK_EX);
-        rename($tmp, self::SNIPPETS_CACHE);
-        if (function_exists('opcache_invalidate')) {
-            @opcache_invalidate(self::SNIPPETS_CACHE, true);   // see SidebarCompiler::forgetCompiled()
-        }
+        self::writeCache(self::SNIPPETS_CACHE, 'HBP Plugin Snippets', $export);
         self::$snippets = $new;
 
         if ($old === $new) {
@@ -327,11 +355,11 @@ class PluginManager
                         continue;
                     }
                     if (!str_starts_with($key, $dirName . '.')) {
-                        error_log("[HBP WARNING] plugin lang key '{$key}' in {$dirName} is not prefixed with '{$dirName}.' -- skipped.");
+                        self::warn($dirName, 'pw_lang_prefix', ['key' => $key], "plugin lang key '{$key}' is not prefixed with '{$dirName}.' -- skipped.");
                         continue;
                     }
                     if (isset($owner[$key]) && $owner[$key] !== $dirName) {
-                        error_log("[HBP WARNING] plugin lang key '{$key}' is already defined by {$owner[$key]} -- {$dirName} skipped.");
+                        self::warn($dirName, 'pw_lang_taken', ['key' => $key, 'owner' => $owner[$key]], "plugin lang key '{$key}' is already defined by {$owner[$key]} -- skipped.");
                         continue;
                     }
                     $owner[$key]            = $dirName;
@@ -340,20 +368,18 @@ class PluginManager
             }
         }
 
-        // Remove stale catalogs so a disabled/deleted plugin stops contributing strings.
-        foreach (glob(sprintf(self::LANG_CACHE_FMT, '*')) ?: [] as $old) {
-            @unlink($old);
-        }
+        $written = [];
         foreach ($byLocale as $locale => $dict) {
             ksort($dict);
-            $export = var_export($dict, true);
-            file_put_contents(
-                sprintf(self::LANG_CACHE_FMT, $locale),
-                "<?php\n// HBP Plugin Language Pack [{$locale}] - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n",
-                LOCK_EX
-            );
-            if (function_exists('opcache_invalidate')) {
-                @opcache_invalidate(sprintf(self::LANG_CACHE_FMT, $locale), true);   // see SidebarCompiler::forgetCompiled()
+            $path = sprintf(self::LANG_CACHE_FMT, $locale);
+            self::writeCache($path, "HBP Plugin Language Pack [{$locale}]", var_export($dict, true));
+            $written[$path] = true;
+        }
+        // Remove the catalogs of locales no active plugin provides any more, so a disabled or
+        // deleted plugin stops contributing strings (only those: the others were just replaced).
+        foreach (glob(sprintf(self::LANG_CACHE_FMT, '*')) ?: [] as $old) {
+            if (!isset($written[$old])) {
+                @unlink($old);
             }
         }
 
@@ -418,6 +444,22 @@ class PluginManager
      * UI or serving routes that depend on something a plugin installs, such as a
      * table created by its database/install.{driver}.sql.
      */
+    /**
+     * Whether a plugin declares a content_render filter. Turning such a plugin on or off, or
+     * changing its version, changes nothing in stored posts until they are re-rendered.
+     */
+    public static function declaresContentRender(string $dirName): bool
+    {
+        $m = json_decode((string)@file_get_contents(self::PLUGINS_DIR . '/' . basename($dirName) . '/manifest.json'), true);
+        return is_array($m) && isset($m['hooks']['content_render']);
+    }
+
+    /** @return string[] the plugins activated in active.php (whether or not a check stopped them) */
+    public static function activeIds(): array
+    {
+        return self::loadActive();
+    }
+
     public static function isActive(string $dirName): bool
     {
         return in_array($dirName, self::loadActive(), true);
@@ -433,15 +475,32 @@ class PluginManager
     // Enable / disable
     // ----------------------------------------------------------------
 
+    /**
+     * @throws RuntimeException when the plugin's install SQL fails; the plugin is then not activated
+     */
     public static function activate(string $dirName): void
     {
         self::runLifecycleSql($dirName, 'install');
+        // Activating is approving the files as they are now
+        require_once CORE_PATH . '/Integrity.php';
+        Integrity::recordPlugin($dirName);
         $active = self::loadActive();
         if (!in_array($dirName, $active, true)) {
             $active[] = $dirName;
             self::saveActive($active);
         }
         self::rebuildCache();
+    }
+
+    /**
+     * Run the plugin's install SQL again (PluginInstaller, after putting a new version of an
+     * active plugin in place). Install SQL is required to be idempotent.
+     *
+     * @throws RuntimeException as activate()
+     */
+    public static function installSql(string $dirName): void
+    {
+        self::runLifecycleSql($dirName, 'install');
     }
 
     public static function deactivate(string $dirName): void
@@ -451,38 +510,82 @@ class PluginManager
         self::rebuildCache();
     }
 
-    public static function delete(string $dirName): void
+    /**
+     * Deactivate, run the uninstall SQL and remove the files. A failing uninstall SQL does not stop
+     * the deletion (the files are going anyway); its message is returned so the screen can say
+     * that tables the plugin created may remain.
+     *
+     * @return string|null the uninstall SQL's error, or null
+     */
+    public static function delete(string $dirName): ?string
     {
         if ($dirName === '' || str_contains($dirName, '..') || str_contains($dirName, '/')) {
-            return;
+            return null;
         }
         self::deactivate($dirName);
-        self::runLifecycleSql($dirName, 'uninstall');
+        $sqlError = null;
+        try {
+            self::runLifecycleSql($dirName, 'uninstall');
+        } catch (RuntimeException $e) {
+            $sqlError = $e->getMessage();
+        }
         $pluginDir = ROOT_PATH . '/plugins/' . $dirName;
-        if (is_dir($pluginDir)) {
+        if (is_link($pluginDir)) {
+            unlink($pluginDir);
+        } elseif (is_dir($pluginDir)) {
             self::removeDir($pluginDir);
         }
+        // The kept previous version and the install record go too: nothing of the plugin stays
+        if (class_exists('PluginInstaller') || is_file(CORE_PATH . '/PluginInstaller.php')) {
+            require_once CORE_PATH . '/PluginInstaller.php';
+            PluginInstaller::forget($dirName);
+        }
+        require_once CORE_PATH . '/Integrity.php';
+        Integrity::forgetPlugin($dirName);
         self::rebuildCache();
+        return $sqlError;
     }
 
+    /**
+     * Run plugins/{id}/database/{install|uninstall}.{driver}.sql, if the plugin has one.
+     * The same runner as migrations: on PostgreSQL a failure rolls the whole file back; on MySQL
+     * the statements before the failing one stay applied. "Already exists" errors are skipped, so
+     * re-activating a plugin works even where MySQL has no IF NOT EXISTS.
+     *
+     * @throws RuntimeException naming the file, the statement and whether the database was left unchanged
+     */
     private static function runLifecycleSql(string $dirName, string $type): void
     {
         $driver  = class_exists('Env') ? Env::get('DB_DRIVER', 'mysql') : ($_ENV['DB_DRIVER'] ?? 'mysql');
-        $sqlFile = ROOT_PATH . '/plugins/' . $dirName . '/database/' . $type . '.' . $driver . '.sql';
+        $file    = "{$type}.{$driver}.sql";
+        $sqlFile = ROOT_PATH . '/plugins/' . $dirName . '/database/' . $file;
         if (!file_exists($sqlFile)) {
             return;
         }
+        require_once CORE_PATH . '/Migrator.php';
         try {
-            DB::getInstance()->exec((string) file_get_contents($sqlFile));
-        } catch (Throwable) {
+            Migrator::runScript((string)file_get_contents($sqlFile), "plugin {$dirName} {$file}");
+        } catch (MigrationFailed $e) {
+            if (class_exists('Audit')) {
+                Audit::log('plugin', 'sql_failed', ['plugin' => $dirName, 'file' => $file, 'statement' => $e->statementNo]);
+            }
+            $detail = $e->getPrevious() !== null ? $e->getPrevious()->getMessage() : $e->getMessage();
+            throw new RuntimeException(HbpLocale::t('err_plugin_sql_failed', ':file failed at statement :no of :count: :message',
+                    ['file' => $file, 'no' => $e->statementNo, 'count' => $e->statementCount,
+                     'message' => class_exists('PluginErrors') ? PluginErrors::clean($detail) : $detail])
+                . ' ' . ($e->rolledBack
+                    ? HbpLocale::t('err_plugin_sql_rolled_back', 'Nothing was changed in the database.')
+                    : HbpLocale::t('err_plugin_sql_partial', 'The statements before it stay applied (MySQL commits each one).')),
+                0, $e);
         }
     }
 
+    /** Remove a directory tree. A symbolic link inside is removed as a link, never followed. */
     private static function removeDir(string $dir): void
     {
         foreach (array_diff((array) scandir($dir), ['.', '..']) as $entry) {
             $path = $dir . '/' . $entry;
-            is_dir($path) ? self::removeDir($path) : unlink($path);
+            is_dir($path) && !is_link($path) ? self::removeDir($path) : unlink($path);
         }
         rmdir($dir);
     }
@@ -490,6 +593,28 @@ class PluginManager
     // ----------------------------------------------------------------
     // Internal helpers
     // ----------------------------------------------------------------
+
+    /**
+     * Write a cache file that is read back with require.
+     *
+     * Written to a temporary file and renamed into place, so a request that requires it at the
+     * same moment sees the old file or the new one, never a half-written one (which would be a
+     * parse error, and a 500 on every page that loads it). If the write fails (disk full,
+     * permissions) the old file is left as it was and the error is raised: a registry where some
+     * caches are new and some are old must not pass for a successful rebuild.
+     */
+    private static function writeCache(string $path, string $label, string $export): void
+    {
+        $tmp = $path . '.' . getmypid() . '.tmp';
+        $php = "<?php\n// {$label} - " . date('Y-m-d H:i:s') . "\nreturn {$export};\n";
+        if (file_put_contents($tmp, $php, LOCK_EX) === false || !rename($tmp, $path)) {
+            @unlink($tmp);
+            throw new RuntimeException("Could not write {$path}");
+        }
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($path, true);   // see SidebarCompiler::forgetCompiled()
+        }
+    }
 
     private static function loadActive(): array
     {
@@ -499,11 +624,8 @@ class PluginManager
 
     private static function saveActive(array $active): void
     {
-        $export = var_export($active, true);
-        file_put_contents(self::ACTIVE_FILE, "<?php\nreturn {$export};\n", LOCK_EX);
-        // rebuildCache() requires this file right after; without this it may get the cached old list
-        if (function_exists('opcache_invalidate')) {
-            @opcache_invalidate(self::ACTIVE_FILE, true);
-        }
+        // rebuildCache() requires this file right after; writeCache() invalidates it in opcache,
+        // without which it may get the cached old list
+        self::writeCache(self::ACTIVE_FILE, 'HBP Active Plugins', var_export($active, true));
     }
 }

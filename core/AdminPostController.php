@@ -428,10 +428,14 @@ class AdminPostController
         [$allowRawHtml, $contentSavedBy] = PostCompiler::trustForSave($previous ?: null, $markdown);
         require_once CORE_PATH . '/SeoCompiler.php';
         // The table of contents and the sponsored notice are baked here too (options of the same pass)
-        $contentHtml  = MarkdownCompiler::render($markdown, $allowRawHtml, [
-            'toc'       => (bool)$showToc,
-            'sponsored' => (bool)$isSponsored,
-            'lang'      => $lang,
+        $contentHtml  = PostCompiler::render([
+            'content_markdown' => $markdown,
+            'raw_html_allowed' => $allowRawHtml,
+            'show_toc'         => (bool)$showToc,
+            'is_sponsored'     => (bool)$isSponsored,
+            'lang'             => $lang,
+            'id'               => $postId > 0 ? $postId : null,
+            'type'             => $type,
         ]);
         // Description used when meta_description is left empty (SeoCompiler::buildMeta)
         $metaDescAuto = SeoCompiler::excerpt($contentHtml);
@@ -699,6 +703,9 @@ class AdminPostController
                     $context['post_id'],
                     $e->getMessage()
                 ));
+                if (class_exists('PluginErrors')) {
+                    PluginErrors::record(PluginErrors::pluginOfFile($hook['file']) ?? '?', 'post_saved', $e->getMessage());
+                }
             }
         }
     }
