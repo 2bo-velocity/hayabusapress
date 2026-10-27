@@ -66,35 +66,72 @@ class HbpBadwordsPlugin
         file_put_contents(self::$cacheFile, $code, LOCK_EX);
     }
 
+    /**
+     * The page shown instead of accepting the submission. Styled by the active theme's own
+     * stylesheet (same origin, so a strict CSP allows it) with the markup of the theme's 404 page;
+     * no inline style or script, nothing loaded from another server.
+     */
     private static function renderBlockedError(string $redirectBack): void   // ends with exit (no "never": PHP 8.0)
     {
         http_response_code(400);
-        $back = htmlspecialchars($redirectBack, ENT_QUOTES, 'UTF-8');
+        header('Content-Type: text/html; charset=UTF-8');
+        header('Cache-Control: no-store');
+
+        $lang = defined('CURRENT_LANG') ? CURRENT_LANG : (class_exists('Env') ? Env::get('SITE_DEFAULT_LANG', 'en') : 'en');
+        $dict = class_exists('HbpLocale') ? HbpLocale::loadFrontendDictionary($lang) : [];
+        $t    = static fn(string $key, string $en): string => htmlspecialchars($dict['hbp-badwords.' . $key] ?? $en, ENT_QUOTES, 'UTF-8');
+        $css  = class_exists('ThemeManager') ? ThemeManager::assetBase() . '/style.css' : '/assets/themes/default/style.css';
+        $back = htmlspecialchars(self::safeBack($redirectBack), ENT_QUOTES, 'UTF-8');
+        $l    = htmlspecialchars($lang, ENT_QUOTES, 'UTF-8');
+        $css  = htmlspecialchars($css, ENT_QUOTES, 'UTF-8');
+
         echo <<<HTML
         <!DOCTYPE html>
-        <html lang="en">
+        <html lang="{$l}">
         <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Forbidden Content | HayabusaPress</title>
-        <script src="https://cdn.tailwindcss.com"></script>
+        <meta name="robots" content="noindex">
+        <title>{$t('title', 'Your submission could not be sent')}</title>
+        <link rel="stylesheet" href="{$css}">
         </head>
-        <body class="bg-slate-50 text-slate-900 flex items-center justify-center min-h-screen font-sans p-4 antialiased">
-            <div class="w-full max-w-md bg-white border border-slate-200 p-6 sm:p-8 rounded-2xl shadow-sm space-y-4">
-                <div class="flex items-center gap-2 text-rose-500 font-mono text-xs font-bold uppercase tracking-wider">
-                    <span>●</span><span>Inappropriate Content Detected</span>
-                </div>
-                <h1 class="text-xl font-bold tracking-tight">Your submission could not be processed</h1>
-                <p class="text-xs text-slate-500 leading-relaxed font-medium">
-                    The submission was rejected because it contains forbidden keywords.
-                </p>
-                <a href="{$back}" class="inline-block w-full text-center bg-slate-950 hover:bg-slate-800 text-white font-semibold text-xs py-3 rounded-xl transition shadow-sm">
-                    Go back and edit the form
-                </a>
+        <body>
+        <div class="hbp-container">
+        <main class="hbp-main">
+            <div class="hbp-404">
+                <h1 class="hbp-404-code">{$t('title', 'Your submission could not be sent')}</h1>
+                <p class="hbp-404-text">{$t('text', 'It contains words this site does not accept. Change the text and send it again.')}</p>
+                <a href="{$back}" class="hbp-404-link">{$t('back', 'Go back to the form')}</a>
             </div>
+        </main>
+        </div>
         </body>
         </html>
         HTML;
         exit;
+    }
+
+    /**
+     * Where "go back" may lead: a path on this site only. The value comes from the request body or
+     * the Referer header, so anything else (javascript:, another host, //host) falls back to "/".
+     */
+    private static function safeBack(string $value): string
+    {
+        $parts = parse_url($value);
+        if ($parts === false) {
+            return '/';
+        }
+        $host = $parts['host'] ?? null;
+        if ($host !== null && strcasecmp($host, (string)($_SERVER['HTTP_HOST'] ?? '')) !== 0) {
+            return '/';
+        }
+        if (isset($parts['scheme']) && !in_array(strtolower($parts['scheme']), ['http', 'https'], true)) {
+            return '/';
+        }
+        $path = (string)($parts['path'] ?? '/');
+        if ($path === '' || $path[0] !== '/' || str_starts_with($path, '//')) {
+            return '/';
+        }
+        return $path . (isset($parts['query']) ? '?' . $parts['query'] : '');
     }
 }
