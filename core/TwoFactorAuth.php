@@ -32,16 +32,26 @@ class TwoFactorAuth
      */
     public static function verifyCode(string $secret, string $code): bool
     {
+        return self::matchStep($secret, $code) !== null;
+    }
+
+    /**
+     * The time-step the code belongs to, or null when it matches none in the ±30-second window.
+     * Replay prevention must compare this step, not the current one: a code from step t is still
+     * accepted during step t+1.
+     */
+    public static function matchStep(string $secret, string $code): ?int
+    {
         if (!ctype_digit($code) || strlen($code) !== 6) {
-            return false;
+            return null;
         }
         $timestamp = (int)floor(time() / 30);
         for ($offset = -1; $offset <= 1; $offset++) {
             if (hash_equals(self::generateCode($secret, $timestamp + $offset), $code)) {
-                return true;
+                return $timestamp + $offset;
             }
         }
-        return false;
+        return null;
     }
 
     /**

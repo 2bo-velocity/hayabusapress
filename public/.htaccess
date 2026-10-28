@@ -4,6 +4,9 @@ RewriteEngine On
 # Deny direct access to storage/ and core/
 RewriteRule ^(storage|core|plugins|themes)/ - [F,L]
 
+# Never run PHP below the directories HBP writes files into (theme assets, media, feeds, sitemaps)
+RewriteRule ^(assets|feeds|sitemaps)/.*\.(php[0-9]*|phtml|phar)$ - [F,L]
+
 # Let existing files and directories through untouched
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d

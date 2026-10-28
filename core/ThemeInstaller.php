@@ -38,6 +38,15 @@ class ThemeInstaller
         'png', 'jpg', 'jpeg', 'webp', 'gif', 'ico', 'woff', 'woff2', 'ttf',
     ];
 
+    /**
+     * Extensions allowed below assets/. That directory is copied into public/assets/themes/{name}/,
+     * where the web server would run a .php directly, bypassing the front controller.
+     */
+    public const ASSET_EXTS = [
+        'css', 'js', 'map', 'svg', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'ico',
+        'woff', 'woff2', 'ttf', 'otf', 'json', 'txt',
+    ];
+
     /** Extension-less files accepted by exact name (licence and notice files of the package). */
     private const ALLOWED_BARE_NAMES = ['LICENSE', 'LICENCE', 'COPYING', 'NOTICE', 'README', 'CHANGELOG', 'AUTHORS'];
 
@@ -494,6 +503,12 @@ class ThemeInstaller
                 $zip->close();
                 self::cleanStage($stageDir);
                 throw new RuntimeException(HbpLocale::t('err_ext_not_allowed', 'Disallowed extension: .') . $ext);
+            }
+            if (str_starts_with($rel, 'assets/') && !in_array($ext, self::ASSET_EXTS, true)) {
+                $zip->close();
+                self::cleanStage($stageDir);
+                throw new RuntimeException(HbpLocale::t('err_theme_asset_ext',
+                    'Only static files (CSS, JavaScript, images, fonts) may be placed in assets/: :file', ['file' => $rel]));
             }
             $parent = dirname($destAbs);
             if (!is_dir($parent) && !@mkdir($parent, 0755, true) && !is_dir($parent)) {

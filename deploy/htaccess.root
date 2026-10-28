@@ -37,6 +37,9 @@
 # Return 404 for direct access to core/, storage/, plugins/, themes/ and vendor/
 RedirectMatch 404 ^/(core|storage|plugins|themes|vendor)(/|$)
 
+# Never run PHP below the directories HBP writes files into (theme assets, media, feeds, sitemaps)
+RedirectMatch 404 ^/(public/)?(assets|feeds|sitemaps)/.*\.(php[0-9]*|phtml|phar)$
+
 # Deny .env, .env.*, composer.json|lock and .git outright
 <FilesMatch "(^\.env|\.env\.|composer\.(json|lock)|\.git)">
     Require all denied

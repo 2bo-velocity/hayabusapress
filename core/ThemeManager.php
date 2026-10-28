@@ -291,11 +291,15 @@ class ThemeManager
         }
     }
 
-    /** Copy assets, skipping links; a file that cannot be copied is skipped (as before). */
+    /**
+     * Copy assets, skipping links and anything that is not a static asset (a .php here would be
+     * reachable as a URL of its own); a file that cannot be copied is skipped (as before).
+     */
     private static function copyDir(string $src, string $dst): void
     {
         require_once __DIR__ . '/FileTree.php';
-        FileTree::copy($src, $dst, false);
+        require_once __DIR__ . '/ThemeInstaller.php';
+        FileTree::copy($src, $dst, false, ThemeInstaller::ASSET_EXTS);
     }
 
     /** Remove a directory tree, never following a symbolic link. */

@@ -165,7 +165,8 @@ class Auth
         }
 
         // Constant-time comparison via hash_equals
-        if (!TwoFactorAuth::verifyCode($secret, $code)) {
+        $step = TwoFactorAuth::matchStep($secret, $code);
+        if ($step === null) {
             // Record the 2FA failure in Throttle
             if (class_exists('Throttle')) {
                 Throttle::record2faFailure(session_id());
@@ -187,15 +188,9 @@ class Auth
             return false;
         }
 
-        // Replay prevention: check and update tfa_last_step (RFC 6238)
-        if ($userId > 0 && class_exists('TwoFactorAuth')) {
-            $currentStep = (int)floor(time() / 30);
-            $user        = DB::fetchOne('SELECT tfa_last_step FROM users WHERE id = ? LIMIT 1', [$userId]);
-            $lastStep    = (int)($user['tfa_last_step'] ?? 0);
-            if ($lastStep >= $currentStep) {
-                return false; // Reject reuse of the same time-step
-            }
-            DB::execute('UPDATE users SET tfa_last_step = ? WHERE id = ?', [$currentStep, $userId]);
+        // Replay prevention (RFC 6238): a step at or before the last one used is refused
+        if (!self::consumeStep($userId, $step)) {
+            return false;
         }
 
         self::establishSession(
@@ -329,9 +324,8 @@ class Auth
         if ($ok) {
             $secret = self::twoFactorSecretFor($id);
             if ($secret !== '') {
-                $ok = preg_match('/^\d{6}$/', $code) === 1
-                    && TwoFactorAuth::verifyCode($secret, $code)
-                    && self::consumeTimeStep($id);
+                $step = preg_match('/^\d{6}$/', $code) === 1 ? TwoFactorAuth::matchStep($secret, $code) : null;
+                $ok   = $step !== null && self::consumeStep($id, $step);
             }
         }
 
@@ -378,21 +372,46 @@ class Auth
     }
 
     /**
-     * Refuse a code from a time-step already used (RFC 6238 replay prevention), as
-     * completeTwoFactor() does. Staff only: the Super User has no row to record it in.
+     * Refuse a code whose time-step is not newer than the last one used (RFC 6238 replay
+     * prevention), and record it. $step is the step the code matched, not the current one.
+     * Staff: one conditional UPDATE, so two requests carrying the same code cannot both pass.
+     * Super User (no row): a small file under storage/auth/, under an exclusive lock.
      */
-    private static function consumeTimeStep(int $id): bool
+    private static function consumeStep(int $id, int $step): bool
     {
-        if ($id === 0) {
+        if ($id !== 0) {
+            return DB::execute(
+                'UPDATE users SET tfa_last_step = ? WHERE id = ? AND (tfa_last_step IS NULL OR tfa_last_step < ?)',
+                [$step, $id, $step]
+            ) === 1;
+        }
+
+        // Failing to record is let through: 2FA itself was verified, and refusing would lock the
+        // Super User out on a site whose storage/ is not writable.
+        $dir = STORAGE_PATH . '/auth';
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
+            error_log('[HBP] Cannot create ' . $dir . '; Super User 2FA replay prevention is off.');
             return true;
         }
-        $currentStep = (int)floor(time() / 30);
-        $user        = DB::fetchOne('SELECT tfa_last_step FROM users WHERE id = ? LIMIT 1', [$id]);
-        if ((int)($user['tfa_last_step'] ?? 0) >= $currentStep) {
-            return false;
+        $fp = @fopen($dir . '/super_user_tfa.step', 'c+');
+        if ($fp === false || !flock($fp, LOCK_EX)) {
+            error_log('[HBP] Cannot write ' . $dir . '/super_user_tfa.step; Super User 2FA replay prevention is off.');
+            if ($fp !== false) {
+                fclose($fp);
+            }
+            return true;
         }
-        DB::execute('UPDATE users SET tfa_last_step = ? WHERE id = ?', [$currentStep, $id]);
-        return true;
+        $last = (int)trim((string)stream_get_contents($fp));
+        $ok   = $step > $last;
+        if ($ok) {
+            ftruncate($fp, 0);
+            rewind($fp);
+            fwrite($fp, (string)$step);
+            fflush($fp);
+        }
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        return $ok;
     }
 
     /** Redirect when not logged in */

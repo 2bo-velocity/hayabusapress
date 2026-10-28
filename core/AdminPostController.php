@@ -1052,12 +1052,6 @@ class AdminPostController
         }
     }
 
-    /**
-     * re-encode the image with GD and strip all metadata including EXIF, saving to $dest.
-     * Only pixel data is written out, so neither GPS location nor an image-spoofing payload remains.
-     * JPEG at quality 90, PNG/WebP nearly lossless, GIF re-saved.
-     * public because avatar upload (AdminUserController) shares it too.
-     */
     /** WebP twins are named after their original: "{hash}.jpg" -> "{hash}.jpg.webp". */
     public static function isWebpTwin(string $filename): bool
     {
@@ -1099,8 +1093,33 @@ class AdminPostController
         return $twin;
     }
 
+    /**
+     * re-encode the image with GD and strip all metadata including EXIF, saving to $dest.
+     * Only pixel data is written out, so neither GPS location nor an image-spoofing payload remains.
+     * JPEG at quality 90, PNG/WebP nearly lossless, GIF re-saved.
+     * public because avatar upload (AdminUserController) shares it too.
+     *
+     * Before decoding, the dimensions are read from the header: GD holds ~4 bytes per pixel, so a
+     * small file with huge dimensions (or a 50-megapixel phone photo under memory_limit=128M) would
+     * otherwise end the request with a fatal error. The EXIF orientation is applied (the tag itself
+     * is dropped with the rest), and the longer side is scaled down to IMAGE_MAX_EDGE.
+     */
     public static function reencodeImage(string $src, string $dest, string $mime): void
     {
+        $size = @getimagesize($src);
+        if ($size === false || (int)$size[0] < 1 || (int)$size[1] < 1) {
+            throw new RuntimeException(HbpLocale::t('err_image_load_failed', 'Failed to load the image (corrupted or unsupported format).'));
+        }
+        [$w, $h] = [(int)$size[0], (int)$size[1]];
+
+        $maxPixels = Env::int('IMAGE_MAX_PIXELS', 50_000_000);
+        if ($maxPixels > 0 && $w * $h > $maxPixels) {
+            throw new RuntimeException(HbpLocale::t('err_image_too_many_pixels',
+                'The image is too large (:width x :height pixels). The limit is :max megapixels.',
+                ['width' => $w, 'height' => $h, 'max' => round($maxPixels / 1_000_000, 1)]));
+        }
+        self::ensureImageMemory($w * $h);
+
         $img = match ($mime) {
             'image/jpeg' => @imagecreatefromjpeg($src),
             'image/png'  => @imagecreatefrompng($src),
@@ -1113,10 +1132,16 @@ class AdminPostController
         }
 
         // Preserve transparency (PNG/GIF/WebP)
-        if (in_array($mime, ['image/png', 'image/gif', 'image/webp'], true)) {
+        $alpha = in_array($mime, ['image/png', 'image/gif', 'image/webp'], true);
+        if ($alpha) {
             imagealphablending($img, false);
             imagesavealpha($img, true);
         }
+
+        if ($mime === 'image/jpeg') {
+            $img = self::applyOrientation($img, $src);
+        }
+        $img = self::scaleDown($img, $alpha);
 
         $ok = match ($mime) {
             'image/jpeg' => imagejpeg($img, $dest, 90),
@@ -1130,6 +1155,116 @@ class AdminPostController
         if (!$ok) {
             throw new RuntimeException(HbpLocale::t('err_image_reencode_failed', 'Failed to re-encode the image.'));
         }
+    }
+
+    /**
+     * Make sure decoding $pixels fits in memory_limit, raising it up to IMAGE_MEMORY_LIMIT when
+     * allowed. Refuses with a readable message instead of letting GD hit a fatal error.
+     */
+    private static function ensureImageMemory(int $pixels): void
+    {
+        $limit = self::bytes((string)ini_get('memory_limit'));
+        if ($limit < 0) {
+            return; // unlimited
+        }
+        // ~5 bytes per pixel for GD's truecolor buffer, twice for the copy made by rotation/scaling
+        $needed = memory_get_usage() + $pixels * 5 * 2 + 8 * 1024 * 1024;
+        if ($needed <= $limit) {
+            return;
+        }
+        $ceiling = self::bytes(Env::get('IMAGE_MEMORY_LIMIT', '256M'));
+        if ($ceiling < 0 || $needed <= $ceiling) {
+            if (@ini_set('memory_limit', (string)$needed) !== false && self::bytes((string)ini_get('memory_limit')) >= $needed) {
+                return;
+            }
+        }
+        throw new RuntimeException(HbpLocale::t('err_image_memory',
+            'The image is too large to process with the memory available (about :needed MB needed, memory_limit is :limit). Upload a smaller image, or raise memory_limit.',
+            ['needed' => (int)ceil($needed / 1048576), 'limit' => (string)ini_get('memory_limit')]));
+    }
+
+    /** "128M" / "1G" / "-1" -> bytes (-1 = unlimited). */
+    private static function bytes(string $value): int
+    {
+        $value = trim($value);
+        if ($value === '' || $value === '-1') {
+            return -1;
+        }
+        $n = (int)$value;
+        return match (strtolower(substr($value, -1))) {
+            'g'     => $n * 1073741824,
+            'm'     => $n * 1048576,
+            'k'     => $n * 1024,
+            default => $n,
+        };
+    }
+
+    /**
+     * Turn the pixels the way the EXIF Orientation tag says, since the tag is dropped on re-encode
+     * (phones store portrait shots as landscape pixels plus the tag). Needs the optional exif
+     * extension; without it the image is kept as stored.
+     *
+     * @param \GdImage|resource $img
+     * @return \GdImage|resource
+     */
+    private static function applyOrientation($img, string $src)
+    {
+        if (!function_exists('exif_read_data')) {
+            return $img;
+        }
+        $exif        = @exif_read_data($src);
+        $orientation = is_array($exif) ? (int)($exif['Orientation'] ?? 1) : 1;
+        if ($orientation < 2 || $orientation > 8) {
+            return $img;
+        }
+        if (in_array($orientation, [2, 4, 5, 7], true)) {
+            imageflip($img, IMG_FLIP_HORIZONTAL);
+        }
+        $angle = match ($orientation) {
+            3, 4    => 180,
+            6, 7    => 270, // imagerotate() turns counter-clockwise
+            5, 8    => 90,
+            default => 0,
+        };
+        if ($angle !== 0) {
+            $rotated = imagerotate($img, $angle, 0);
+            if ($rotated !== false) {
+                imagedestroy($img);
+                $img = $rotated;
+            }
+        }
+        return $img;
+    }
+
+    /**
+     * Scale down so the longer side is at most IMAGE_MAX_EDGE pixels (0 = keep the size).
+     *
+     * @param \GdImage|resource $img
+     * @return \GdImage|resource
+     */
+    private static function scaleDown($img, bool $alpha)
+    {
+        $max = Env::int('IMAGE_MAX_EDGE', 2560);
+        $w   = imagesx($img);
+        $h   = imagesy($img);
+        if ($max <= 0 || max($w, $h) <= $max) {
+            return $img;
+        }
+        $ratio = $max / max($w, $h);
+        $nw    = max(1, (int)round($w * $ratio));
+        $nh    = max(1, (int)round($h * $ratio));
+        $out   = imagecreatetruecolor($nw, $nh);
+        if ($out === false) {
+            return $img;
+        }
+        if ($alpha) {
+            imagealphablending($out, false);
+            imagesavealpha($out, true);
+            imagefill($out, 0, 0, imagecolorallocatealpha($out, 0, 0, 0, 127));
+        }
+        imagecopyresampled($out, $img, 0, 0, 0, 0, $nw, $nh, $w, $h);
+        imagedestroy($img);
+        return $out;
     }
 
     /**
@@ -1233,7 +1368,9 @@ class AdminPostController
         DB::execute(
             'INSERT INTO attachments (post_id, filename, original_name, mime_type, file_size, created_at)
              VALUES (?, ?, ?, ?, ?, NOW())',
-            [$postId, $filename, mb_substr(basename((string)$file['name']), 0, 255), $mime, (int)$file['size']]
+            // images: the size of what was written (re-encoded and possibly scaled down), not the upload
+            [$postId, $filename, mb_substr(basename((string)$file['name']), 0, 255), $mime,
+             $isImage ? (int)@filesize($dest) : (int)$file['size']]
         );
 
         // WebP twin ({file}.webp) for JPEG/PNG. It is an attachments row of its own, so publishing,

@@ -30,3 +30,5 @@ storage/integrity/
 # Plugin folders waiting to be reviewed and applied (only the explanation is part of the package)
 plugins/_incoming/*
 !plugins/_incoming/README.txt
+# Super User 2FA replay prevention (the last time-step used)
+storage/auth/

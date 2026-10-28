@@ -63,9 +63,10 @@ class FileTree
     /**
      * Copy a directory tree, skipping links.
      *
-     * @param bool $strict throw when a file cannot be copied (false: skip it and go on)
+     * @param bool          $strict throw when a file cannot be copied (false: skip it and go on)
+     * @param string[]|null $exts   when given, only files with one of these (lowercase) extensions are copied
      */
-    public static function copy(string $src, string $dst, bool $strict = true): void
+    public static function copy(string $src, string $dst, bool $strict = true, ?array $exts = null): void
     {
         if (!@mkdir($dst, 0755, true) && !is_dir($dst)) {
             if ($strict) {
@@ -79,7 +80,9 @@ class FileTree
             }
             $from = $src . '/' . $item;
             if (is_dir($from)) {
-                self::copy($from, $dst . '/' . $item, $strict);
+                self::copy($from, $dst . '/' . $item, $strict, $exts);
+            } elseif ($exts !== null && !in_array(strtolower(pathinfo($item, PATHINFO_EXTENSION)), $exts, true)) {
+                continue;
             } elseif (!@copy($from, $dst . '/' . $item) && $strict) {
                 throw new RuntimeException(HbpLocale::t('err_file_write_failed', 'Failed to write file: ') . $from);
             }
