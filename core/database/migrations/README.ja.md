@@ -17,6 +17,7 @@
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`、`posts.layout` / `show_toc` / `is_sponsored`、新テーブル `blocks` と `links` | 不要。追加列の既定値はすべて 1.0.0 と同じ表示になる |
 | 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`、`categories.hashtags` / `feed_enabled`、新テーブル `post_templates` · `slug_redirects` · `speakers` | `php core/cli.php posts:recompile --reassess` を1回実行する。各記事の本文で生 HTML を通すかどうかを、著者の現在のロールから記録する |
 | 1.5.0 | `V001005000__series` | 新テーブル `series`、`posts.series_id` / `series_order` / `series_part`（`idx_posts_series` つき）/ `char_count` / `reading_minutes` | `php core/cli.php posts:recompile` を1回実行する。既存の記事の文字数と読了時間を埋める |
+| 1.7.0 | `V001007000__collections` | 新テーブル `collections`、`series.collection_id` / `collection_order` | 通常の `php core/cli.php system:init` のほかは不要 |
 
 1.0.0 自体に差分ファイルは無い。1.0.0 は baseline（`V001000000`）であり、上の差分はそのスキーマを起点に前進させる。
 

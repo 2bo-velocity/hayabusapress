@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
--- HayabusaPress (HBP) - MySQL 8.x Schema (HBP 1.5.0 / V001005000)
+-- HayabusaPress (HBP) - MySQL 8.x Schema (HBP 1.7.0 / V001007000)
 -- InnoDB / utf8mb4_unicode_ci
 --
 -- The complete, current form of the schema, used for new installs. The schema_migrations INSERT at
@@ -17,6 +17,7 @@
 --   5. Auto descriptions, share text, raw-HTML provenance, category feeds, post templates, slug
 --      redirects and speakers (V001004000)
 --   6. Series (ordered runs of posts), character count and reading time (V001005000)
+--   7. Collections (ordered runs of series) (V001007000)
 
 SET NAMES utf8mb4;
 SET CHARACTER SET utf8mb4;
@@ -72,6 +73,23 @@ CREATE TABLE IF NOT EXISTS `tags` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
+-- collections (an ordered run of series; series.collection_id points here)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS `collections` (
+  `id`               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `lang`             VARCHAR(5)   NOT NULL DEFAULT 'en' COMMENT 'Content language code; every series in the collection has it',
+  `slug`             VARCHAR(255) NOT NULL,
+  `title`            VARCHAR(255) NOT NULL,
+  `description`      TEXT         NULL DEFAULT NULL COMMENT 'Markdown',
+  `description_html` TEXT         NULL DEFAULT NULL COMMENT 'Rendered on save',
+  `cover_image`      VARCHAR(255) NULL DEFAULT NULL COMMENT 'Image URL path',
+  `created_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_collections_lang_slug` (`lang`, `slug`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
 -- series (an ordered run of posts; posts.series_id points here)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS `series` (
@@ -86,10 +104,13 @@ CREATE TABLE IF NOT EXISTS `series` (
   `feed_enabled`     TINYINT(1)   NOT NULL DEFAULT 0 COMMENT 'Publish /feeds/{lang}/series/{slug}.*',
   `post_count`       INT          NOT NULL DEFAULT 0 COMMENT 'Published posts. Moved by deltas in core/Counters.php',
   `char_count`       BIGINT       NOT NULL DEFAULT 0 COMMENT 'Characters of the published posts. Moved by deltas',
+  `collection_id`    INT UNSIGNED NULL DEFAULT NULL COMMENT 'Collection this series belongs to',
+  `collection_order` INT          NOT NULL DEFAULT 0 COMMENT 'Position in the collection (spaced by 10)',
   `created_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_series_lang_slug` (`lang`, `slug`)
+  UNIQUE KEY `uk_series_lang_slug` (`lang`, `slug`),
+  CONSTRAINT `fk_series_collection` FOREIGN KEY (`collection_id`) REFERENCES `collections` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -417,4 +438,5 @@ INSERT IGNORE INTO `schema_migrations` (`version`, `name`, `checksum`, `applied_
   ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', NOW()),
   ('V001003000', 'widgets_layouts_links',             'BASELINE', NOW()),
   ('V001004000', 'seo_feeds_templates',               'BASELINE', NOW()),
-  ('V001005000', 'series',                            'BASELINE', NOW());
+  ('V001005000', 'series',                            'BASELINE', NOW()),
+  ('V001007000', 'collections',                       'BASELINE', NOW());

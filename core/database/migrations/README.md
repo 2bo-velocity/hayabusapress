@@ -17,6 +17,7 @@ This directory holds **schema diffs between released versions** as forward-only 
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`; `posts.layout` / `show_toc` / `is_sponsored`; new tables `blocks` and `links` | Nothing to rebuild. Every new column defaults to the 1.0.0 behaviour |
 | 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`; `categories.hashtags` / `feed_enabled`; new tables `post_templates`, `slug_redirects` and `speakers` | Run `php core/cli.php posts:recompile --reassess` once: it records, for every post, whether its body keeps raw HTML (from the author's current role) |
 | 1.5.0 | `V001005000__series` | New table `series`; `posts.series_id` / `series_order` / `series_part` (with `idx_posts_series`) / `char_count` / `reading_minutes` | Run `php core/cli.php posts:recompile` once: it fills in the character count and reading time of every existing post |
+| 1.7.0 | `V001007000__collections` | New table `collections`; `series.collection_id` / `collection_order` | Nothing beyond the usual `php core/cli.php system:init` |
 
 1.0.0 itself has no diff file: it is the baseline (`V001000000`), and its schema is the starting point
 that the diffs above move forward.

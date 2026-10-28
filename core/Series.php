@@ -227,7 +227,9 @@ final class Series
     /**
      * What a post page shows of its series, built when the page is generated (FPC miss only).
      *
-     * @return array{id:int,title:string,slug:string,url:string,status:string,part:?string,prev:?array,next:?array}|null
+     * collection (1.7.0): the name and link of the series' collection, or null.
+     *
+     * @return array{id:int,title:string,slug:string,url:string,status:string,part:?string,prev:?array,next:?array,collection:?array}|null
      */
     public static function forPost(array $post, string $defaultLang): ?array
     {
@@ -235,6 +237,7 @@ final class Series
             return null;
         }
         require_once CORE_PATH . '/SeriesCompiler.php';
+        require_once CORE_PATH . '/Collection.php';
         $s = SeriesCompiler::get((int)$post['series_id']);
         if ($s === null) {
             return null;
@@ -251,6 +254,7 @@ final class Series
             'part'   => ($post['series_part'] ?? '') !== '' ? (string)$post['series_part'] : null,
             'prev'   => $link($n['prev']),
             'next'   => $link($n['next']),
+            'collection' => Collection::forPost($s, $defaultLang),
         ];
     }
 }

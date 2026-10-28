@@ -20,6 +20,7 @@ $fmt        = static fn(string $key, string $fallback, $n) => $e(sprintf($__[$ke
         {% if $series['cover_image'] %}
         <img class="hbp-series-cover" src="{{ $series['cover_image'] }}" alt="" loading="lazy">
         {% endif %}
+        <?php $collectionNavPlace = 'top'; ?>{% include 'collection_nav' %}
         <p class="hbp-series-label">{@ series_label @}</p>
         <h1 class="hbp-archive-title hbp-series-title">{{ $series['title'] }}</h1>
         <p class="hbp-series-meta">
@@ -57,5 +58,7 @@ $fmt        = static fn(string $key, string $fallback, $n) => $e(sprintf($__[$ke
 </section>
 
 {% include 'pagination' %}
+
+<?php $collectionNavPlace = 'bottom'; ?>{% include 'collection_nav' %}
 
 {% include 'footer' %}

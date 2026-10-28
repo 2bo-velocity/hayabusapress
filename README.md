@@ -53,8 +53,9 @@ Every design decision answers one question: *can we pre-compute this so the fron
 | **Publishing slots & schedule** | Declare the times you publish every day (e.g. `07:00, 12:00, 21:00`) in the SEO settings. The editor offers them as buttons plus a *next free slot* shortcut, and **Admin → Schedule** lays scheduled/published posts out as days × slots with free slots highlighted. Admin-only — nothing runs on public pages. |
 | **Titles, descriptions & slugs** | A page-title format (`{title} \| {site}`). An empty description is filled at save time with a ~120-character excerpt of the body (`meta_description_auto`; the TOC and sponsored notice are skipped). An empty slug is generated from the title, the date/time (`20261024-0700`) or the post ID (`p123`); a title with no ASCII left falls back to date/time. |
 | **Series** | An ordered run of ordinary posts — a serialized story, a tutorial in parts. Each post shows its series and chapter above the body and *previous / contents / next* below it; the series gets a table of contents at `/post/series/{slug}` (chapter headings, characters per post, ongoing / completed / on hiatus, an optional cover and its own feed; `SERIES_PAGE_SIZE` × `SERIES_FPC_DEPTH` = 10,000 posts by default). Posts keep their own URLs and every other feature. Neighbours are looked up when the page cache is written (a one-row index range each), and a change purges only the post, its old and new neighbours and the table of contents. Managed in **Admin → Series** (order and chapters) and on each post's edit screen. |
+| **Collections** | An ordered run of series, one level up — the parts of a larger story, the courses of a curriculum, the areas of a region. The collection gets a page at `/post/collection/{slug}` listing its series with a published post (cover, status, length); each table of contents links to the collection and to the previous / next series in it; each post names the collection before its series. A series belongs to at most one collection, of its own language. Everything public is read from `series.cache.php`, and a change purges only the collection page, its series' tables of contents, and — when the collection's name changes or a series moves in or out — that series' posts, one file each. Managed in **Admin → Collections** and on each series' screen. |
 | **Character count & reading time** | Counted at save time from the rendered body — ruby readings, code, the TOC and the sponsored notice are left out — and stored on the post (`char_count`, `reading_minutes`). CJK characters are timed by characters per minute and the rest by words per minute, added together, so mixed-language posts get a sensible figure (`READING_SPEED_CJK` / `READING_SPEED_WORDS`). The bundled theme prints "N min read" (`SHOW_READING_TIME`). |
-| **Structured data (JSON-LD)** | `BlogPosting` + `BreadcrumbList` on posts (with `isPartOf` and the series in the breadcrumbs for a post of a series), `CreativeWorkSeries` on a series' table of contents, `WebPage` on pages, `WebSite` on the top page — built while the page cache is written. `application/ld+json` is a data block, so the CSP needs no hash for it. |
+| **Structured data (JSON-LD)** | `BlogPosting` + `BreadcrumbList` on posts (with `isPartOf` and the series in the breadcrumbs for a post of a series), `CreativeWorkSeries` on a series' table of contents (with `isPartOf` and the collection in the breadcrumbs when it is in one), `CollectionPage` on a collection page, `WebPage` on pages, `WebSite` on the top page — built while the page cache is written. `application/ld+json` is a data block, so the CSP needs no hash for it. |
 | **Distribution feeds** | JSON Feed 1.1 (`/feed.json`) next to Atom/RSS, and per-category and per-series feeds (`/feeds/{lang}/category/{slug}.*`, `/feeds/{lang}/series/{slug}.*`) for categories and series with *feed* switched on. JSON items carry `_hbp.share_text`: a social-post text you type, or one generated at save time from title + description + the category's hashtags and sized to **X's weighted count** (CJK = 2, URL = 23) with room left for the link. |
 | **301 for renamed slugs** | Changing the slug of a published post keeps the old one; `/post/{old}` answers 301 to the current URL from a compiled array (no DB, never cached). Chains collapse, and a slug reused by another post wins over the redirect. |
 | **Post templates** | Starting points for new posts (title, body, category, tags, layout, TOC, sponsored flag; `{date}` → today). Using one **copies** it — editing the template later changes no existing post. |
@@ -177,6 +178,10 @@ else needs backfilling).
 Upgrading to **1.6.0** changes no schema (`SCHEMA_VERSION` stays `V001005000`), so `db:migrate` has
 nothing to do; run step 4 (`system:init`) and nothing else. The first `system:init` (or the first admin
 login) after the upgrade records the current plugin files as approved, for the change detection.
+
+Upgrading to **1.7.0** (`V001007000`) needs only steps 3 and 4: `db:migrate` adds the `collections`
+table and two columns to `series` (no series is in a collection until you add one), and nothing has to
+be backfilled.
 
 #### Without SSH
 
@@ -632,7 +637,8 @@ hayabusapress/
 │   ├── RedirectCompiler.php    # Old slugs → redirects.cache.php, served as a 301 without a DB query
 │   ├── SpeakerCompiler.php     # :::say speakers → speakers.cache.php
 │   ├── Series.php              # Series: order, previous / next, precise purge of what a change touches
-│   ├── SeriesCompiler.php      # Series → series.cache.php (titles, status, counters)
+│   ├── SeriesCompiler.php      # Series and collections → series.cache.php (titles, status, counters)
+│   ├── Collection.php          # Collections: listing, previous / next series, the collection on a post
 │   ├── PostCompiler.php        # Re-rendering with the raw-HTML trust recorded per post; share text
 │   ├── ShareText.php           # Social-post text sized for X's weighted character count
 │   ├── PublishSlots.php        # Daily publishing slots, next free slot, the weekly schedule grid
@@ -686,7 +692,8 @@ hayabusapress/
 │   │   ├── schedule.tpl.php        # Days × publishing slots
 │   │   ├── templates.tpl.php       # Post templates
 │   │   ├── speakers.tpl.php        # Speech-bubble speakers
-│   │   ├── series.tpl.php          # Series: settings, order and chapters
+│   │   ├── series.tpl.php          # Series: settings, order and chapters, collection
+│   │   ├── collections.tpl.php     # Collections: settings, order of the series
 │   │   ├── categories.tpl.php
 │   │   ├── tags.tpl.php
 │   │   ├── plugins.tpl.php
@@ -706,6 +713,8 @@ hayabusapress/
 │       ├── search.tpl.php
 │       ├── series.tpl.php          # A series' table of contents (optional; other themes fall back to this one)
 │       ├── series_nav.tpl.php      # Series title / previous · contents · next, included by post.tpl.php
+│       ├── collection.tpl.php      # A collection page (optional; other themes fall back to this one)
+│       ├── collection_nav.tpl.php  # Collection / previous · next series, included by series.tpl.php
 │       ├── 404.tpl.php
 │       └── assets/
 │           ├── style.css           # {# inline_css 'style.css' #} → baked into FPC
@@ -798,11 +807,12 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
   VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>),
          ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>),
          ('V001004000', 'seo_feeds_templates',               'BASELINE', <now>),
-         ('V001005000', 'series',                            'BASELINE', <now>);
+         ('V001005000', 'series',                            'BASELINE', <now>),
+         ('V001007000', 'collections',                       'BASELINE', <now>);
 ```
 
 - `checksum = 'BASELINE'` is a sentinel meaning "this row came from a full schema, not a diff migration" — checksum verification skips `BASELINE` rows.
-- Because `db:install` applies the full schema **including this INSERT**, a fresh database immediately reports itself as the current version (`V001005000`) = fully up to date. `db:migrate` then correctly finds **nothing pending** (it will never try to re-add existing columns).
+- Because `db:install` applies the full schema **including this INSERT**, a fresh database immediately reports itself as the current version (`V001007000`) = fully up to date. `db:migrate` then correctly finds **nothing pending** (it will never try to re-add existing columns).
 
 #### The three guarantees
 
@@ -824,6 +834,7 @@ The full schema files always describe the latest version and record every diff a
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`; `posts.layout` / `show_toc` / `is_sponsored`; new tables `blocks` and `links` |
 | 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`; `categories.hashtags` / `feed_enabled`; new tables `post_templates`, `slug_redirects` and `speakers`. Then run `posts:recompile --reassess` once |
 | 1.5.0 | `V001005000__series` | New table `series`; `posts.series_id` / `series_order` / `series_part` (`idx_posts_series`) / `char_count` / `reading_minutes`. Then run `posts:recompile` once |
+| 1.7.0 | `V001007000__collections` | New table `collections`; `series.collection_id` / `collection_order` |
 
 > This stays within HBP's constitution: pure PHP + PDO, raw SQL, zero external tooling (no Flyway/Liquibase).
 
@@ -849,7 +860,8 @@ The full schema files always describe the latest version and record every diff a
 | 16 | `post_templates` | Starting points for new posts (copied into the post, never linked) |
 | 17 | `slug_redirects` | Old slugs of published posts → `post_id`, served as 301 |
 | 18 | `speakers` | Speakers of `:::say` speech bubbles (`slug` unique, name, avatar, side) |
-| 19 | `series` | Series (`lang` + `slug` unique, description, status, cover, `feed_enabled`, `post_count` / `char_count` counters) |
+| 19 | `series` | Series (`lang` + `slug` unique, description, status, cover, `feed_enabled`, `post_count` / `char_count` counters, `collection_id` / `collection_order`) |
+| 20 | `collections` | Collections of series (`lang` + `slug` unique, description, cover; no status or counter of its own) |
 
 ### Key `posts` columns
 
@@ -1046,6 +1058,8 @@ Themes must print the slots and the widget areas themselves:
 ```
 
 The same goes for series. A theme without `series.tpl.php` gets the bundled theme's table of contents (inside its own header and footer, under its own CSS — style the `hbp-series-*` classes), but the previous / next links on a post appear only where the theme's `post.tpl.php` prints them: `{% include 'series_nav' %}`, or its own markup from `$post['series']` (`title`, `url`, `status`, `part`, `prev` / `next` = `{title, url}` or null).
+
+Collections follow the same pattern: `collection.tpl.php` is optional (`hbp-collection-*` classes), and a theme with its own `series.tpl.php` prints the collection and the previous / next series with `{% include 'collection_nav' %}` or from `$collectionNav` (`title`, `url`, `prev` / `next`). On a post, `$post['series']['collection']` is `{title, url}` or null.
 
 ### The 3 Rules
 

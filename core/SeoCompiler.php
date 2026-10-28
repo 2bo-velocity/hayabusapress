@@ -175,6 +175,8 @@ class SeoCompiler
             $series = SeriesCompiler::get((int)$post['series_id']);
         }
         $seriesUrl = $series !== null ? $siteUrl . $langPrefix . '/post/series/' . $series['slug'] : '';
+        $collection = $series !== null ? SeriesCompiler::collection($series['collection_id'] ?? null) : null;
+        $collectionUrl = $collection !== null ? $siteUrl . $langPrefix . '/post/collection/' . $collection['slug'] : '';
         if ($post['type'] === 'post') {
             $author  = class_exists('AuthorCompiler') ? AuthorCompiler::get(isset($post['user_id']) ? (int)$post['user_id'] : null) : [];
             $article = [
@@ -193,6 +195,9 @@ class SeoCompiler
             if ($imgAbs !== '')  $article['image'] = [$imgAbs];
             if ($series !== null) {
                 $article['isPartOf'] = ['@type' => 'CreativeWorkSeries', 'name' => $series['title'], 'url' => $seriesUrl];
+                if ($collection !== null) {
+                    $article['isPartOf']['isPartOf'] = ['@type' => 'CreativeWorkSeries', 'name' => $collection['title'], 'url' => $collectionUrl];
+                }
             }
             $html .= self::jsonLd(array_filter($article, static fn($v) => $v !== null));
         } else {
@@ -203,7 +208,10 @@ class SeoCompiler
 
         $crumbs = [[$siteNameRaw, $home]];
         if ($series !== null) {
-            // A post of a series sits under the series, not under its category
+            // A post of a series sits under the series (and its collection), not under its category
+            if ($collection !== null) {
+                $crumbs[] = [$collection['title'], $collectionUrl];
+            }
             $crumbs[] = [$series['title'], $seriesUrl];
         } elseif ($post['type'] === 'post' && !empty($post['category_id']) && class_exists('CategoryCompiler')) {
             foreach (CategoryCompiler::load() as $cat) {
@@ -302,7 +310,65 @@ class SeoCompiler
         $work = ['@context' => 'https://schema.org', '@type' => 'CreativeWorkSeries', 'name' => $name, 'url' => $url, 'inLanguage' => $lang];
         if ($desc !== '')     $work['description'] = $desc;
         if ($coverAbs !== '') $work['image'] = $coverAbs;
+        $crumbs = [[$siteName, $home]];
+        require_once CORE_PATH . '/SeriesCompiler.php';
+        $collection = SeriesCompiler::collection(isset($series['collection_id']) ? (int)$series['collection_id'] : null);
+        if ($collection !== null) {
+            $collectionUrl    = $siteUrl . ($lang === $default ? '' : "/{$lang}") . '/post/collection/' . $collection['slug'];
+            $work['isPartOf'] = ['@type' => 'CreativeWorkSeries', 'name' => $collection['title'], 'url' => $collectionUrl];
+            $crumbs[]         = [$collection['title'], $collectionUrl];
+        }
         $html .= self::jsonLd($work);
+        $crumbs[] = [$name, $url];
+        $html .= self::breadcrumbs($crumbs);
+        return $html;
+    }
+
+    /**
+     * Head tags for a collection page (1.7.0): title, description and cover like a series, a
+     * CollectionPage whose main entity is the collection with its series as parts, and breadcrumbs.
+     *
+     * @param array            $collection the collections row (description_html, cover_image)
+     * @param array<int,array> $series     the listed series, each with an absolute-able 'url'
+     */
+    public static function buildCollectionMeta(array $collection, array $series, string $url, string $lang): string
+    {
+        $global   = self::loadGlobal();
+        $siteName = (string)($global['site_name'] ?? '') !== '' ? (string)$global['site_name'] : Env::get('SITE_NAME', 'HayabusaPress');
+        $siteUrl  = rtrim(Env::get('SITE_URL', ''), '/');
+        $default  = Env::get('SITE_DEFAULT_LANG', 'en');
+        $home     = $siteUrl . ($lang === $default ? '' : "/{$lang}") . '/';
+        $e        = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+        $name     = (string)$collection['title'];
+        $desc     = self::excerpt((string)($collection['description_html'] ?? ''));
+        if ($desc === '') $desc = (string)($global['default_description'] ?? '');
+        $cover    = (string)($collection['cover_image'] ?? '');
+        $coverAbs = $cover === '' ? '' : (preg_match('#^https?://#', $cover) ? $cover : $siteUrl . '/' . ltrim($cover, '/'));
+
+        $html  = '<title>' . $e(self::title($name, $global)) . "</title>\n";
+        if ($desc !== '') $html .= '<meta name="description" content="' . $e($desc) . "\">\n";
+        $html .= '<meta property="og:title" content="' . $e($name) . "\">\n";
+        if ($url !== '') $html .= '<meta property="og:url" content="' . $e($url) . "\">\n";
+        $html .= "<meta property=\"og:type\" content=\"website\">\n";
+        if ($desc !== '') $html .= '<meta property="og:description" content="' . $e($desc) . "\">\n";
+        $html .= '<meta property="og:site_name" content="' . $e($siteName) . "\">\n";
+        if ($coverAbs !== '') {
+            $html .= '<meta property="og:image" content="' . $e($coverAbs) . "\">\n";
+            $html .= "<meta name=\"twitter:card\" content=\"summary_large_image\">\n";
+            $html .= '<meta name="twitter:image" content="' . $e($coverAbs) . "\">\n";
+        } else {
+            $html .= "<meta name=\"twitter:card\" content=\"summary\">\n";
+        }
+
+        $work = ['@type' => 'CreativeWorkSeries', 'name' => $name, 'url' => $url, 'inLanguage' => $lang];
+        if ($desc !== '')     $work['description'] = $desc;
+        if ($coverAbs !== '') $work['image'] = $coverAbs;
+        $parts = [];
+        foreach ($series as $s) {
+            $parts[] = ['@type' => 'CreativeWorkSeries', 'name' => (string)$s['title'], 'url' => $siteUrl . (string)$s['url']];
+        }
+        if ($parts !== []) $work['hasPart'] = $parts;
+        $html .= self::jsonLd(['@context' => 'https://schema.org', '@type' => 'CollectionPage', 'name' => $name, 'url' => $url, 'inLanguage' => $lang, 'mainEntity' => $work]);
         $html .= self::breadcrumbs([[$siteName, $home], [$name, $url]]);
         return $html;
     }

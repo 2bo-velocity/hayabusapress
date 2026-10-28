@@ -388,6 +388,11 @@ match (true) {
     $subPath === '/series/save' && isPost() => handleAdminSeriesSave($adminPath),
     $subPath === '/series/delete' && isPost() => handleAdminSeriesDelete($adminPath),
     $subPath === '/series/reorder' && isPost() => handleAdminSeriesReorder($adminPath),
+    $subPath === '/collections' => handleAdminCollections($commonData),
+    $subPath === '/collections/save' && isPost() => handleAdminCollectionSave($adminPath),
+    $subPath === '/collections/delete' && isPost() => handleAdminCollectionDelete($adminPath),
+    $subPath === '/collections/reorder' && isPost() => handleAdminCollectionReorder($adminPath),
+    $subPath === '/collections/attach' && isPost() => handleAdminCollectionAttach($adminPath),
 
     // --- Category/tag management ---
     $subPath === '/categories' => handleAdminCategories($commonData),
@@ -1474,7 +1479,8 @@ function handleAdminSeries(array $common): void
         [$editId]
     ) : [];
     $contentLocales = HbpLocale::getAvailableContentLocales();
-    View::render('admin/series', array_merge($common, compact('series', 'editSeries', 'episodes', 'contentLocales')));
+    $collections    = DB::fetchAll('SELECT id, lang, title FROM collections ORDER BY lang, title');
+    View::render('admin/series', array_merge($common, compact('series', 'editSeries', 'episodes', 'contentLocales', 'collections')));
 }
 
 function handleAdminSeriesSave(string $adminPath): void
@@ -1482,6 +1488,7 @@ function handleAdminSeriesSave(string $adminPath): void
     Gate::authorize('taxonomy:manage');
     require_once CORE_PATH . '/Series.php';
     require_once CORE_PATH . '/SeriesCompiler.php';
+    require_once CORE_PATH . '/Collection.php';
     $id     = (int)($_POST['id'] ?? 0);
     $title  = mb_substr(trim((string)($_POST['title'] ?? '')), 0, 255);
     $lang   = trim((string)($_POST['lang'] ?? ''));
@@ -1510,6 +1517,18 @@ function handleAdminSeriesSave(string $adminPath): void
         exit;
     }
 
+    // Collection (1.7.0): one of the series' language, or none. A series that joins (or moves) goes last
+    $collectionId = (int)($_POST['collection_id'] ?? 0) ?: null;
+    if ($collectionId !== null) {
+        $collection = DB::fetchOne('SELECT id, lang FROM collections WHERE id = ? LIMIT 1', [$collectionId]);
+        if (!$collection || $collection['lang'] !== $lang) {
+            header('Location: ' . $back . 'collection_lang=1');
+            exit;
+        }
+    }
+    $collectionOrder = $collectionId === null ? 0
+        : ($before && (int)($before['collection_id'] ?? 0) === $collectionId ? (int)$before['collection_order'] : Collection::nextOrder($collectionId));
+
     // Description: Markdown rendered once here, without raw HTML (like a post saved without post:raw_html)
     $descHtml = $desc !== '' ? MarkdownCompiler::render($desc, false, ['lang' => $lang]) : null;
 
@@ -1532,13 +1551,13 @@ function handleAdminSeriesSave(string $adminPath): void
     try {
         if ($id > 0) {
             DB::execute(
-                'UPDATE series SET lang=?, slug=?, title=?, description=?, description_html=?, status=?, cover_image=?, feed_enabled=?, updated_at=? WHERE id=?',
-                [$lang, $slug, $title, $desc !== '' ? $desc : null, $descHtml, $status, $cover, $feedOn, gmdate('Y-m-d H:i:s'), $id]
+                'UPDATE series SET lang=?, slug=?, title=?, description=?, description_html=?, status=?, cover_image=?, feed_enabled=?, collection_id=?, collection_order=?, updated_at=? WHERE id=?',
+                [$lang, $slug, $title, $desc !== '' ? $desc : null, $descHtml, $status, $cover, $feedOn, $collectionId, $collectionOrder, gmdate('Y-m-d H:i:s'), $id]
             );
         } else {
             DB::execute(
-                'INSERT INTO series (lang, slug, title, description, description_html, status, cover_image, feed_enabled) VALUES (?,?,?,?,?,?,?,?)',
-                [$lang, $slug, $title, $desc !== '' ? $desc : null, $descHtml, $status, $cover, $feedOn]
+                'INSERT INTO series (lang, slug, title, description, description_html, status, cover_image, feed_enabled, collection_id, collection_order) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                [$lang, $slug, $title, $desc !== '' ? $desc : null, $descHtml, $status, $cover, $feedOn, $collectionId, $collectionOrder]
             );
             $id = (int)DB::lastInsertId();
         }
@@ -1547,6 +1566,8 @@ function handleAdminSeriesSave(string $adminPath): void
         exit;
     }
 
+    // Also purges what the series' collection shows of it (the collection page, the neighbouring
+    // tables of contents, and this series' posts when it moved in or out of a collection)
     SeriesCompiler::compile();
     if ($before) {
         // Each post shows the series' title and status; the old table of contents may be at another slug
@@ -1601,6 +1622,187 @@ function handleAdminSeriesReorder(string $adminPath): void
         Series::purgeAll($id);
     }
     header('Location: /' . $adminPath . '/series?edit=' . $id . '&saved=1');
+    exit;
+}
+
+/**
+ * Collections (1.7.0): list, create/edit form, and the series of the collection being edited.
+ * Same permission as series (taxonomy:manage).
+ *
+ * Every handler writes the rows and then calls SeriesCompiler::compile(), which compares the map
+ * before and after and purges what changed: the collection page, the tables of contents of its
+ * series, and the posts of a series whose collection name changed. Only the description, which
+ * the map does not hold, is purged here.
+ */
+function handleAdminCollections(array $common): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Collection.php';   // Collection::path() in the view
+    $collections = DB::fetchAll(
+        'SELECT c.*, (SELECT COUNT(*) FROM series s WHERE s.collection_id = c.id) AS member_count
+           FROM collections c ORDER BY c.lang, c.title'
+    );
+    $editId         = (int)($_GET['edit'] ?? 0);
+    $editCollection = null;
+    foreach ($collections as $c) {
+        if ((int)$c['id'] === $editId) {
+            $editCollection = $c;
+        }
+    }
+    $members   = [];
+    $available = [];
+    if ($editCollection) {
+        $members = DB::fetchAll(
+            'SELECT id, title, slug, lang, status, post_count FROM series WHERE collection_id = ? ORDER BY collection_order, id',
+            [$editId]
+        );
+        // Series of the same language that are elsewhere or in no collection (adding one moves it here)
+        $available = DB::fetchAll(
+            'SELECT s.id, s.title, c.title AS collection_title FROM series s LEFT JOIN collections c ON c.id = s.collection_id
+              WHERE s.lang = ? AND (s.collection_id IS NULL OR s.collection_id <> ?) ORDER BY s.title',
+            [$editCollection['lang'], $editId]
+        );
+    }
+    $contentLocales = HbpLocale::getAvailableContentLocales();
+    View::render('admin/collections', array_merge($common, compact('collections', 'editCollection', 'members', 'available', 'contentLocales')));
+}
+
+function handleAdminCollectionSave(string $adminPath): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Collection.php';
+    require_once CORE_PATH . '/CacheManager.php';
+    $id    = (int)($_POST['id'] ?? 0);
+    $title = mb_substr(trim((string)($_POST['title'] ?? '')), 0, 255);
+    $lang  = trim((string)($_POST['lang'] ?? ''));
+    if (!isset(hbpContentLocales()[$lang])) {
+        $lang = Env::get('SITE_DEFAULT_LANG', 'en');
+    }
+    $slug = strtolower(trim((string)($_POST['slug'] ?? '')));
+    if ($slug === '') {
+        $slug = trim((string)preg_replace('/[^a-z0-9]+/', '-', strtolower($title)), '-');
+    }
+    $desc = trim(str_replace(["\r\n", "\r"], "\n", (string)($_POST['description'] ?? '')));
+    $back = '/' . $adminPath . '/collections' . ($id > 0 ? '?edit=' . $id . '&' : '?');
+
+    $before = $id > 0 ? DB::fetchOne('SELECT * FROM collections WHERE id = ? LIMIT 1', [$id]) : null;
+    if ($title === '' || !preg_match(Series::SLUG_PATTERN, $slug) || ($id > 0 && !$before)) {
+        header('Location: ' . $back . 'error=1');
+        exit;
+    }
+    // Every series of a collection has the collection's language
+    if ($before && $before['lang'] !== $lang
+        && DB::fetchOne('SELECT 1 AS x FROM series WHERE collection_id = ? LIMIT 1', [$id])) {
+        header('Location: ' . $back . 'lang_locked=1');
+        exit;
+    }
+
+    $descHtml = $desc !== '' ? MarkdownCompiler::render($desc, false, ['lang' => $lang]) : null;
+
+    $cover = $before['cover_image'] ?? null;
+    try {
+        if (isset($_FILES['cover']) && ($_FILES['cover']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+            $newCover = Media::avatarUrl(AdminUserController::processAvatarUpload($_FILES['cover']));
+            hbpDeleteSeriesCover($cover);
+            $cover = $newCover;
+        } elseif (!empty($_POST['cover_remove'])) {
+            hbpDeleteSeriesCover($cover);
+            $cover = null;
+        }
+    } catch (Throwable $e) {
+        header('Location: ' . $back . 'cover_error=1');
+        exit;
+    }
+
+    try {
+        if ($id > 0) {
+            DB::execute(
+                'UPDATE collections SET lang=?, slug=?, title=?, description=?, description_html=?, cover_image=?, updated_at=? WHERE id=?',
+                [$lang, $slug, $title, $desc !== '' ? $desc : null, $descHtml, $cover, gmdate('Y-m-d H:i:s'), $id]
+            );
+        } else {
+            DB::execute(
+                'INSERT INTO collections (lang, slug, title, description, description_html, cover_image) VALUES (?,?,?,?,?,?)',
+                [$lang, $slug, $title, $desc !== '' ? $desc : null, $descHtml, $cover]
+            );
+            $id = (int)DB::lastInsertId();
+        }
+    } catch (Throwable) {
+        header('Location: ' . $back . 'error=1');   // duplicate (lang, slug)
+        exit;
+    }
+
+    SeriesCompiler::compile();
+    if ($before) {
+        // The description is not in series.cache.php, so compile() cannot see it change
+        CacheManager::purgePage("{$before['lang']}_list_collection_{$before['slug']}");
+    }
+    SiteFileCompiler::compileSitemap();
+    header('Location: /' . $adminPath . '/collections?edit=' . $id . '&saved=1');
+    exit;
+}
+
+function handleAdminCollectionDelete(string $adminPath): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Collection.php';
+    $id         = (int)($_POST['id'] ?? 0);
+    $collection = $id > 0 ? DB::fetchOne('SELECT * FROM collections WHERE id = ? LIMIT 1', [$id]) : null;
+    if ($collection) {
+        $pdo = DB::getInstance();
+        $pdo->beginTransaction();
+        try {
+            DB::execute('UPDATE series SET collection_id = NULL, collection_order = 0 WHERE collection_id = ?', [$id]);
+            DB::execute('DELETE FROM collections WHERE id = ?', [$id]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+        hbpDeleteSeriesCover($collection['cover_image'] ?? null);
+        SeriesCompiler::compile();
+        SiteFileCompiler::compileSitemap();
+    }
+    header('Location: /' . $adminPath . '/collections');
+    exit;
+}
+
+/** Save the order of a collection's series, and let go of the ones marked for removal. */
+function handleAdminCollectionReorder(string $adminPath): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Collection.php';
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id > 0 && DB::fetchOne('SELECT 1 AS x FROM collections WHERE id = ? LIMIT 1', [$id])) {
+        $remove = array_map('intval', (array)($_POST['remove'] ?? []));
+        foreach ($remove as $sid) {
+            DB::execute('UPDATE series SET collection_id = NULL, collection_order = 0 WHERE id = ? AND collection_id = ?', [$sid, $id]);
+        }
+        Collection::reorder($id, array_diff(array_map('intval', (array)($_POST['ids'] ?? [])), $remove));
+        SeriesCompiler::compile();
+        SiteFileCompiler::compileSitemap();
+    }
+    header('Location: /' . $adminPath . '/collections?edit=' . $id . '&saved=1');
+    exit;
+}
+
+/** Add a series of the collection's language at the end (moving it out of any other collection). */
+function handleAdminCollectionAttach(string $adminPath): void
+{
+    Gate::authorize('taxonomy:manage');
+    require_once CORE_PATH . '/Collection.php';
+    $id     = (int)($_POST['id'] ?? 0);
+    $sid    = (int)($_POST['series_id'] ?? 0);
+    $col    = $id > 0 ? DB::fetchOne('SELECT id, lang FROM collections WHERE id = ? LIMIT 1', [$id]) : null;
+    $series = $sid > 0 ? DB::fetchOne('SELECT id, lang FROM series WHERE id = ? LIMIT 1', [$sid]) : null;
+    if (!$col || !$series || $series['lang'] !== $col['lang']) {
+        header('Location: /' . $adminPath . '/collections?edit=' . $id . '&collection_lang=1');
+        exit;
+    }
+    DB::execute('UPDATE series SET collection_id = ?, collection_order = ? WHERE id = ?', [$id, Collection::nextOrder($id), $sid]);
+    SeriesCompiler::compile();
+    SiteFileCompiler::compileSitemap();
+    header('Location: /' . $adminPath . '/collections?edit=' . $id . '&saved=1');
     exit;
 }
 

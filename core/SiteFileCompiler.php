@@ -64,7 +64,8 @@ class SiteFileCompiler
         $split       = false; // have we had to start splitting?
 
         // 'series' = the tables of contents of series with at least one published post
-        foreach (['post', 'page', 'series'] as $type) {
+        // 'collection' = the pages of collections with at least one such series (1.7.0)
+        foreach (['post', 'page', 'series', 'collection'] as $type) {
             $chunkNo = 0;
             foreach (self::streamPublished($type) as $row) {
                 $line = self::buildUrlLine($siteUrl, $defaultLang, $row, $now);
@@ -134,7 +135,16 @@ class SiteFileCompiler
     {
         $lastId = 0;
         while (true) {
-            $rows = $type === 'series'
+            $rows = $type === 'collection'
+                ? DB::fetchAll(
+                    "SELECT c.id, 'collection' AS type, c.lang, c.slug, c.updated_at
+                       FROM collections c
+                      WHERE c.id > ? AND EXISTS (SELECT 1 FROM series s WHERE s.collection_id = c.id AND s.post_count > 0)
+                      ORDER BY c.id ASC
+                      LIMIT " . self::FETCH_BATCH,
+                    [$lastId]
+                )
+                : ($type === 'series'
                 ? DB::fetchAll(
                     "SELECT id, 'series' AS type, lang, slug, updated_at
                        FROM series
@@ -150,7 +160,7 @@ class SiteFileCompiler
                       ORDER BY id ASC
                       LIMIT " . self::FETCH_BATCH,
                     [$type, $lastId]
-                );
+                ));
             if ($rows === []) {
                 return;
             }
@@ -229,7 +239,7 @@ class SiteFileCompiler
             return '';
         }
         $lastmod  = htmlspecialchars(substr((string)($post['updated_at'] ?? $now), 0, 10), ENT_QUOTES, 'UTF-8');
-        $priority = match ($post['type'] ?? '') { 'post' => '0.8', 'series' => '0.7', default => '0.6' };
+        $priority = match ($post['type'] ?? '') { 'post' => '0.8', 'series', 'collection' => '0.7', default => '0.6' };
         return "  <url><loc>{$url}</loc><lastmod>{$lastmod}</lastmod><priority>{$priority}</priority></url>\n";
     }
 
@@ -245,6 +255,7 @@ class SiteFileCompiler
         $path       = match ($post['type']) {
             'post'   => "{$langPrefix}/post/{$slug}",
             'series' => "{$langPrefix}/post/series/{$slug}",
+            'collection' => "{$langPrefix}/post/collection/{$slug}",
             default  => "{$langPrefix}/page/{$slug}",
         };
         return htmlspecialchars($siteUrl . $path, ENT_QUOTES, 'UTF-8');

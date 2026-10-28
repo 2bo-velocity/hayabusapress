@@ -200,6 +200,10 @@ if ($path === '/' || preg_match('#^/page/(\d{1,4})$#', $path, $m)) {
     $p       = (int)($m[2] ?? 1);
     $key     = $lang . '_list_series_' . $m[1] . ($p > 1 ? "_p{$p}" : '');
     $resolve = ['kind' => 'series', 'slug' => $m[1], 'lang' => $lang, 'page' => $p];
+} elseif (preg_match('#^/post/collection/([a-z0-9][a-z0-9-]{0,199})$#', $path, $m)) {
+    // A collection page lists its series on one page: no /page/N
+    $key     = $lang . '_list_collection_' . $m[1];
+    $resolve = ['kind' => 'collection', 'slug' => $m[1], 'lang' => $lang, 'page' => 1];
 } elseif (preg_match('#^/search$#', $path)) {
     // the search page is static (client-side search). Baked into FPC and served.
     $key     = $lang . '_search';
@@ -271,6 +275,7 @@ match ($resolve['kind']) {
     'tag'      => handleTag($resolve, $commonData, $key, $pageSize),
     'archive'  => handleArchive($resolve, $commonData, $key, $pageSize),
     'series'   => handleSeries($resolve, $commonData, $key),
+    'collection' => handleCollection($resolve, $commonData, $key),
     'search'   => handleSearch($resolve, $commonData, $key, $pageSize),
     'post'     => handleDetail($resolve, $commonData, $key),
     'page'     => handleDetail($resolve, $commonData, $key),
@@ -451,8 +456,45 @@ function handleSeries(array $resolve, array $common, ?string $fpcKey): void
     }
     // First post of this page: the reader's "start here" on page 1
     $firstUrl = (($lang === ($common['defaultLang'] ?? '')) ? '' : "/{$lang}") . '/post/' . $posts[0]['slug'];
+    // Its collection, and the previous / next series in it (from series.cache.php, no query)
+    require_once CORE_PATH . '/Collection.php';
+    $collectionNav = Collection::forSeries($series, (string)($common['defaultLang'] ?? ''));
 
-    renderWithFpc($fpcKey, 'series', array_merge($common, $listing, compact('series', 'posts', 'firstUrl')));
+    renderWithFpc($fpcKey, 'series', array_merge($common, $listing, compact('series', 'posts', 'firstUrl', 'collectionNav')));
+}
+
+/**
+ * A collection page (1.7.0): its series in collection order, from series.cache.php. The only query
+ * is the collection's own row, for the description. A collection none of whose series has a
+ * published post has no public page, like an empty series.
+ */
+function handleCollection(array $resolve, array $common, ?string $fpcKey): void
+{
+    require_once CORE_PATH . '/Collection.php';
+    $lang     = $resolve['lang'];
+    $compiled = SeriesCompiler::findCollection($lang, $resolve['slug']);
+    $row      = $compiled !== null ? DB::fetchOne('SELECT * FROM collections WHERE id = ? LIMIT 1', [$compiled['id']]) : null;
+    $series   = $compiled !== null ? Collection::listing($compiled, (string)($common['defaultLang'] ?? '')) : [];
+    if (!$row || $series === []) {
+        handle404($common);
+        return;
+    }
+    $collection = $row + [
+        'post_count' => array_sum(array_column($series, 'post_count')),
+        'char_count' => array_sum(array_column($series, 'char_count')),
+    ];
+    // No cover of its own: the first series' cover stands in for og:image
+    if ((string)($collection['cover_image'] ?? '') === '') {
+        foreach ($series as $s) {
+            if ($s['cover'] !== '') {
+                $collection['cover_image'] = $s['cover'];
+                break;
+            }
+        }
+    }
+    $listing = listingViewData($resolve, $common, false);
+
+    renderWithFpc($fpcKey, 'collection', array_merge($common, $listing, compact('collection', 'series')));
 }
 
 function handleTag(array $resolve, array $common, ?string $fpcKey, int $pageSize): void
@@ -806,6 +848,7 @@ function routeBasePath(array $resolve, string $defaultLang): ?string
         'tag'      => $prefix . '/post/tag/'      . ($resolve['slug'] ?? ''),
         'archive'  => $prefix . '/post/archive/'  . ($resolve['ym']   ?? ''),
         'series'   => $prefix . '/post/series/'   . ($resolve['slug'] ?? ''),
+        'collection' => $prefix . '/post/collection/' . ($resolve['slug'] ?? ''),
         'post'     => $prefix . '/post/'          . ($resolve['slug'] ?? ''),
         'page'     => $prefix . '/page/'          . ($resolve['slug'] ?? ''),
         default    => null,

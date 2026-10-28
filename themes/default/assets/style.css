@@ -595,6 +595,24 @@ ruby rt {
 .hbp-series-nav-dir   { display: block; font-size: .75rem; color: var(--color-muted); }
 .hbp-series-nav-name  { font-size: .9rem; }
 
+/* Collections (1.7.0): the collection page, and a series' place in its collection */
+.hbp-series-crumb-sep  { color: var(--color-muted); margin: 0 .5rem; }
+
+.hbp-collection-header { margin-bottom: 2rem; }
+.hbp-collection-cover  { display: block; max-width: 16rem; margin-bottom: 1rem; border-radius: .75rem; }
+.hbp-collection-label  { font-size: .8rem; color: var(--color-muted); letter-spacing: .05em; }
+.hbp-collection-meta   { display: flex; flex-wrap: wrap; gap: .5rem 1rem; font-size: .875rem; color: var(--color-muted); margin: .5rem 0 1rem; }
+.hbp-collection-desc   { margin: 1rem 0; }
+.hbp-collection-list-title { font-size: 1.1rem; font-weight: 700; margin-bottom: .75rem; }
+.hbp-collection-series { list-style: none; border-top: 1px solid var(--color-border); }
+.hbp-collection-series-item { display: flex; gap: 1rem; align-items: center; padding: .75rem 0; border-bottom: 1px solid var(--color-border); }
+.hbp-collection-series-cover { width: 4.5rem; height: 4.5rem; object-fit: cover; border-radius: .5rem; flex-shrink: 0; }
+.hbp-collection-series-body  { min-width: 0; }
+.hbp-collection-series-title { display: block; font-weight: 700; color: var(--color-text); }
+.hbp-collection-series-meta  { display: flex; flex-wrap: wrap; gap: .25rem .75rem; margin-top: .25rem; font-size: .75rem; color: var(--color-muted); }
+.hbp-collection-crumb  { font-size: .875rem; margin-bottom: .5rem; }
+.hbp-collection-nav    { margin: 2rem 0; }
+
 @media (max-width: 640px) {
     .hbp-series-item      { flex-direction: column; gap: .25rem; }
     .hbp-series-nav-links { grid-template-columns: 1fr 1fr; }

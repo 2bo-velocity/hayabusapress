@@ -21,11 +21,11 @@ declare(strict_types=1);
 class Schema
 {
     /**
-     * Schema version the code expects. HBP 1.5.0.
+     * Schema version the code expects. HBP 1.7.0.
      * Must equal the highest migration in core/database/migrations, because db:status compares this
      * against the newest row in schema_migrations to detect code/DB drift.
      */
-    public const SCHEMA_VERSION = 'V001005000';
+    public const SCHEMA_VERSION = 'V001007000';
 
     /**
      * Version recorded for the "this came from the full schema" baseline row.

@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later | AGPLv3 with the HayabusaPress Plugin & Theme Exception; see LICENSE
--- HayabusaPress (HBP) - PostgreSQL 13-16 Schema (HBP 1.5.0 / V001005000)
+-- HayabusaPress (HBP) - PostgreSQL 13-16 Schema (HBP 1.7.0 / V001007000)
 --
 -- The complete, current form of the schema, used for new installs. The schema_migrations INSERT at
 -- the end of this file stamps the same version as SCHEMA_VERSION in core/Schema.php, so this file is
@@ -16,6 +16,7 @@
 --   5. Auto descriptions, share text, raw-HTML provenance, category feeds, post templates, slug
 --      redirects and speakers (V001004000)
 --   6. Series (ordered runs of posts), character count and reading time (V001005000)
+--   7. Collections (ordered runs of series) (V001007000)
 --
 -- [IMPORTANT - CHARACTER ENCODING] This schema assumes a database whose encoding is UTF8.
 --   A PostgreSQL database's encoding is fixed at CREATE DATABASE time and cannot be changed
@@ -74,6 +75,22 @@ CREATE TABLE IF NOT EXISTS tags (
 );
 
 -- ============================================================
+-- collections (an ordered run of series; series.collection_id points here)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS collections (
+  id               INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  lang             VARCHAR(5)   NOT NULL DEFAULT 'en',      -- Every series in the collection has this language
+  slug             VARCHAR(255) NOT NULL,
+  title            VARCHAR(255) NOT NULL,
+  description      TEXT         NULL,                       -- Markdown
+  description_html TEXT         NULL,                       -- Rendered on save
+  cover_image      VARCHAR(255) NULL,                       -- Image URL path
+  created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uk_collections_lang_slug UNIQUE (lang, slug)
+);
+
+-- ============================================================
 -- series (an ordered run of posts; posts.series_id points here)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS series (
@@ -88,6 +105,8 @@ CREATE TABLE IF NOT EXISTS series (
   feed_enabled     BOOLEAN      NOT NULL DEFAULT FALSE,     -- Publish /feeds/{lang}/series/{slug}.*
   post_count       INT          NOT NULL DEFAULT 0,         -- Published posts. Moved by deltas in core/Counters.php
   char_count       BIGINT       NOT NULL DEFAULT 0,         -- Characters of the published posts. Moved by deltas
+  collection_id    INT          NULL REFERENCES collections (id) ON DELETE SET NULL, -- Collection this series belongs to
+  collection_order INT          NOT NULL DEFAULT 0,         -- Position in the collection (spaced by 10)
   created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT uk_series_lang_slug UNIQUE (lang, slug)
@@ -429,5 +448,6 @@ INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES
   ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', CURRENT_TIMESTAMP),
   ('V001003000', 'widgets_layouts_links',             'BASELINE', CURRENT_TIMESTAMP),
   ('V001004000', 'seo_feeds_templates',               'BASELINE', CURRENT_TIMESTAMP),
-  ('V001005000', 'series',                            'BASELINE', CURRENT_TIMESTAMP)
+  ('V001005000', 'series',                            'BASELINE', CURRENT_TIMESTAMP),
+  ('V001007000', 'collections',                       'BASELINE', CURRENT_TIMESTAMP)
   ON CONFLICT (version) DO NOTHING;

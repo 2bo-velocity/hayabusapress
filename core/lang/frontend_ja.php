@@ -68,5 +68,11 @@ return [
     'series_prev'             => '← 前へ',
     'series_next'             => '次へ →',
     'series_nav_aria'         => '連載のナビゲーション',
+    'collection_label'        => 'コレクション',
+    'collection_series'       => '収録する連載',
+    'collection_series_count' => '全%d連載',
+    'collection_prev'         => '← 前の連載',
+    'collection_next'         => '次の連載 →',
+    'collection_nav_aria'     => 'コレクションのナビゲーション',
     'reading_minutes'         => '約%d分',
 ];

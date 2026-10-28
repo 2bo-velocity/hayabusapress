@@ -18,6 +18,7 @@ $defaultLang = Env::get('SITE_DEFAULT_LANG', 'en');
 {% if $_GET['error'] %}<div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">{@ series_invalid @}</div>{% endif %}
 {% if $_GET['lang_locked'] %}<div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">{@ series_lang_locked @}</div>{% endif %}
 {% if $_GET['cover_error'] %}<div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">{@ series_cover_error @}</div>{% endif %}
+{% if $_GET['collection_lang'] %}<div class="mb-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 text-sm">{@ collection_lang_mismatch @}</div>{% endif %}
 
 <div class="grid md:grid-cols-2 gap-6">
     <div>
@@ -105,6 +106,18 @@ $defaultLang = Env::get('SITE_DEFAULT_LANG', 'en');
                     <?php endif; ?>
                     <input type="file" name="cover" accept="image/jpeg,image/png,image/gif,image/webp" class="text-sm">
                 </div>
+                <?php if ($collections): ?>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">{@ collection_field @}</label>
+                    <select name="collection_id" class="<?= $inputClass ?>">
+                        <option value="0">{@ collection_none @}</option>
+                        <?php foreach ($collections as $col): ?>
+                        <option value="<?= (int)$col['id'] ?>" <?= (int)($editSeries['collection_id'] ?? 0) === (int)$col['id'] ? 'selected' : '' ?>><?= $e($col['title']) ?> (<?= $e($col['lang']) ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                    <p class="text-xs text-slate-400 mt-1">{@ collection_field_hint @}</p>
+                </div>
+                <?php endif; ?>
                 <label class="flex items-center gap-2 text-sm cursor-pointer">
                     <input type="checkbox" name="feed_enabled" value="1" <?= !empty($editSeries['feed_enabled']) ? 'checked' : '' ?>> {@ series_feed_enabled @}
                 </label>

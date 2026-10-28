@@ -5,6 +5,7 @@
 // A post's place in its series, included by post.tpl.php above the body ($seriesNavPlace = 'top':
 // the series title and chapter) and below it ('bottom': previous / contents / next).
 // $post['series'] is null for a post outside a series, and then nothing is printed.
+// $post['series']['collection'] (1.7.0) is the series' collection {title, url}, or null.
 //
 // Other themes are not given this automatically — their post.tpl.php has to include it (or read
 // $post['series'] itself), like PluginManager::snippet() and SidebarCompiler::areaFor().
@@ -13,7 +14,7 @@ $sn = $post['series'] ?? null;
 <?php if ($sn): ?>
 <?php if (($seriesNavPlace ?? 'bottom') === 'top'): ?>
 <p class="hbp-series-crumb">
-    <a href="{{ $sn['url'] }}">{{ $sn['title'] }}</a>{% if $sn['part'] %}<span class="hbp-series-crumb-part">{{ $sn['part'] }}</span>{% endif %}
+    {% if $sn['collection'] %}<a class="hbp-series-crumb-collection" href="{{ $sn['collection']['url'] }}">{{ $sn['collection']['title'] }}</a><span class="hbp-series-crumb-sep" aria-hidden="true">›</span>{% endif %}<a href="{{ $sn['url'] }}">{{ $sn['title'] }}</a>{% if $sn['part'] %}<span class="hbp-series-crumb-part">{{ $sn['part'] }}</span>{% endif %}
 </p>
 <?php else: ?>
 <nav class="hbp-series-nav" aria-label="{@ series_nav_aria @}">

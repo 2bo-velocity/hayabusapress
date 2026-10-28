@@ -53,8 +53,9 @@ WordPress の「重さ・セキュリティの緩さ・積み上がった技術�
 | **公開枠と予約画面** | SEO 設定に毎日の公開時刻（例：`07:00, 12:00, 21:00`）を登録すると、編集画面に枠のボタンと「次の空き枠」が出ます。**管理画面 → 予約**は予約・公開済みの記事を「日付 × 公開枠」のマス目に並べ、空き枠を強調します。管理画面だけで完結し、公開ページには何も足しません。 |
 | **タイトル・概要文・スラッグ** | ページタイトルの書式（`{title} \| {site}`）。概要文が空なら、保存時に本文から約120字の抜粋を作ります（`meta_description_auto`。目次と広告表記は除く）。スラッグが空なら、タイトル・日付と時刻（`20261024-0700`）・記事 ID（`p123`）から作ります。英数字の残らないタイトルは日付と時刻になります。 |
 | **連載** | 小説の連載や章立てのチュートリアルのように、順番のある普通の記事のまとまり。各記事の本文の上に連載名と章、下に「前へ・目次・次へ」が出て、連載ごとに目次ページ `/post/series/{slug}` ができます（章見出し・各話の文字数・連載中／完結／休載中・任意の表紙と専用フィード。既定で `SERIES_PAGE_SIZE` × `SERIES_FPC_DEPTH` ＝ 1万本まで載る）。記事は自分の URL も他の機能もそのまま持ちます。前後の記事はページキャッシュを書くときに引き（それぞれ索引の1行引き）、変更時は本人・前後（変更前と変更後）・目次だけを消します。**管理画面 → 連載**（順序と章）と、各記事の編集画面で扱います。 |
+| **コレクション** | 連載を順に並べて束ねる1段上のまとまり（大きな物語の各部、講座の各コース、地域の各エリア）。コレクションごとにページ `/post/collection/{slug}` ができ、公開済みの記事を持つ連載を表紙・状態・分量つきで並べます。各連載の目次にはコレクションへのリンクとコレクション内の前後の連載が、各記事には連載名の前にコレクション名が出ます。連載が属せるのは自分と同じ言語のコレクション1つだけです。公開側はすべて `series.cache.php` から読み、変更時はコレクションのページ・所属する連載の目次と、コレクション名の変更や連載の出し入れのときだけその連載の記事を、1ファイルずつ消します。**管理画面 → コレクション**と、各連載の画面で扱います。 |
 | **文字数と読了時間** | 保存時に、描画後の本文から数えて記事に記録します（`char_count` / `reading_minutes`）。ルビの読み・コード・目次・広告表記は数えません。CJK の文字は1分あたりの文字数、それ以外は1分あたりの語数で時間を出して足し合わせるので、日英が混ざった記事でも妥当な値になります（`READING_SPEED_CJK` / `READING_SPEED_WORDS`）。同梱テーマは「約N分」を表示します（`SHOW_READING_TIME`）。 |
-| **構造化データ（JSON-LD）** | 記事に `BlogPosting` と `BreadcrumbList`（連載の記事は `isPartOf` を持ち、パンくずが連載を通る）、連載の目次に `CreativeWorkSeries`、固定ページに `WebPage`、トップに `WebSite`。ページキャッシュを書くときに組み立てます。`application/ld+json` はデータブロックなので、CSP にハッシュは要りません。 |
+| **構造化データ（JSON-LD）** | 記事に `BlogPosting` と `BreadcrumbList`（連載の記事は `isPartOf` を持ち、パンくずが連載を通る）、連載の目次に `CreativeWorkSeries`（コレクションに属していれば `isPartOf` を持ち、パンくずがコレクションを通る）、コレクションのページに `CollectionPage`、固定ページに `WebPage`、トップに `WebSite`。ページキャッシュを書くときに組み立てます。`application/ld+json` はデータブロックなので、CSP にハッシュは要りません。 |
 | **配信用フィード** | Atom/RSS に加えて JSON Feed 1.1（`/feed.json`）、さらに「フィードを出す」をオンにしたカテゴリ別・連載別のフィード（`/feeds/{lang}/category/{slug}.*`・`/feeds/{lang}/series/{slug}.*`）。JSON の各記事は `_hbp.share_text` を持ちます。手入力の SNS 用文面か、保存時にタイトル・概要・カテゴリのハッシュタグから作った文面で、**X の重み付き文字数**（日本語 2・URL 23）でリンク分を残して収めます。 |
 | **スラッグ変更時の 301** | 公開済みの記事のスラッグを変えると旧スラッグを残し、`/post/{旧}` をコンパイル済みの配列から現在の URL へ 301 で返します（DB を引かず、キャッシュにも載せない）。連鎖は畳み、別の記事が同じスラッグを使えばそちらが優先です。 |
 | **記事テンプレート** | 新しい記事のひな形（タイトル・本文・カテゴリ・タグ・レイアウト・目次・広告表記。`{date}` は今日の日付）。使うと**写す**だけなので、あとでテンプレートを直しても既存の記事は変わりません。 |
@@ -174,6 +175,9 @@ php core/cli.php system:init && php core/cli.php plugins:rebuild
 **1.6.0** へ上げるときはスキーマの変更がありません（`SCHEMA_VERSION` は `V001005000` のまま）。`db:migrate` は何もしないので、
 手順4（`system:init`）だけを実行してください。アップグレード後の最初の `system:init`（または最初の管理画面へのログイン）が、
 改ざん検知のために、その時点のプラグインのファイルを承認済みとして記録します。
+
+**1.7.0**（`V001007000`）へ上げるときは、手順3と4だけです。`db:migrate` が `collections` テーブルと `series` の2列を足します
+（連載は、コレクションに入れるまでどこにも属しません）。埋め直すものはありません。
 
 #### SSH が無い場合
 
@@ -621,7 +625,8 @@ hayabusapress/
 │   ├── RedirectCompiler.php    # 旧スラッグ → redirects.cache.php（DBを引かずに 301）
 │   ├── SpeakerCompiler.php     # :::say の話者 → speakers.cache.php
 │   ├── Series.php              # 連載：順序・前後の記事・変更が及ぶページの精密パージ
-│   ├── SeriesCompiler.php      # 連載 → series.cache.php（タイトル・状態・カウンタ）
+│   ├── SeriesCompiler.php      # 連載とコレクション → series.cache.php（タイトル・状態・カウンタ）
+│   ├── Collection.php          # コレクション：一覧・前後の連載・記事に出すコレクション
 │   ├── PostCompiler.php        # 記事ごとに記録した生 HTML の許可での再生成・SNS 用文面
 │   ├── ShareText.php           # X の重み付き文字数に収める SNS 用文面
 │   ├── PublishSlots.php        # 毎日の公開枠・次の空き枠・週間の予約マス目
@@ -676,7 +681,8 @@ hayabusapress/
 │   │   ├── schedule.tpl.php        # 日付 × 公開枠
 │   │   ├── templates.tpl.php       # 記事テンプレート
 │   │   ├── speakers.tpl.php        # 吹き出しの話者
-│   │   ├── series.tpl.php          # 連載：設定・順序と章
+│   │   ├── series.tpl.php          # 連載：設定・順序と章・コレクション
+│   │   ├── collections.tpl.php     # コレクション：設定・連載の順序
 │   │   ├── categories.tpl.php
 │   │   ├── tags.tpl.php
 │   │   ├── plugins.tpl.php
@@ -696,6 +702,8 @@ hayabusapress/
 │       ├── search.tpl.php
 │       ├── series.tpl.php          # 連載の目次（任意。無いテーマは同梱テーマのものを使う）
 │       ├── series_nav.tpl.php      # 連載名／前へ・目次・次へ。post.tpl.php から読み込む
+│       ├── collection.tpl.php      # コレクションのページ（任意。無いテーマは同梱テーマのものを使う）
+│       ├── collection_nav.tpl.php  # コレクション／前の連載・次の連載。series.tpl.php から読み込む
 │       ├── 404.tpl.php
 │       └── assets/
 │           ├── style.css           # {# inline_css 'style.css' #} → FPCに焼き込み
@@ -789,11 +797,12 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
   VALUES ('V001000000', 'baseline: full schema (HBP 1.0.0)', 'BASELINE', <now>),
          ('V001003000', 'widgets_layouts_links',             'BASELINE', <now>),
          ('V001004000', 'seo_feeds_templates',               'BASELINE', <now>),
-         ('V001005000', 'series',                            'BASELINE', <now>);
+         ('V001005000', 'series',                            'BASELINE', <now>),
+         ('V001007000', 'collections',                       'BASELINE', <now>);
 ```
 
 - `checksum = 'BASELINE'` は「この行は差分マイグレーションではなくフルスキーマ由来」を示す番兵値 — checksum 検証は `BASELINE` 行をスキップします。
-- `db:install` はこの INSERT を**含めて**フルスキーマを適用するため、新規DBは即座に現行版（`V001005000`）= 完全に最新と報告します。`db:migrate` は正しく**未適用なし**を返します（既存カラムを再 `ADD` しようとして事故ることがない）。
+- `db:install` はこの INSERT を**含めて**フルスキーマを適用するため、新規DBは即座に現行版（`V001007000`）= 完全に最新と報告します。`db:migrate` は正しく**未適用なし**を返します（既存カラムを再 `ADD` しようとして事故ることがない）。
 
 #### 3つの保証
 
@@ -815,6 +824,7 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 1.3.0 | `V001003000__widgets_layouts_links` | `sidebar_widgets.title` / `settings`、`posts.layout` / `show_toc` / `is_sponsored`、新テーブル `blocks` と `links` |
 | 1.4.0 | `V001004000__seo_feeds_templates` | `posts.meta_description_auto` / `share_text` / `share_text_auto` / `raw_html_allowed` / `content_saved_by`、`categories.hashtags` / `feed_enabled`、新テーブル `post_templates` · `slug_redirects` · `speakers`。適用後に `posts:recompile --reassess` を1回 |
 | 1.5.0 | `V001005000__series` | 新テーブル `series`、`posts.series_id` / `series_order` / `series_part`（`idx_posts_series`）/ `char_count` / `reading_minutes`。適用後に `posts:recompile` を1回 |
+| 1.7.0 | `V001007000__collections` | 新テーブル `collections`、`series.collection_id` / `collection_order` |
 
 > これは HBP の憲法の範囲内に収まります：純PHP + PDO、生SQL、外部ツールゼロ（Flyway/Liquibase なし）。新規インストールの正規経路は常にフルスキーマファイルです。
 
@@ -840,7 +850,8 @@ INSERT ... INTO schema_migrations (version, name, checksum, applied_at)
 | 16 | `post_templates` | 新しい記事のひな形（記事へ写すだけで、つながりは持たない） |
 | 17 | `slug_redirects` | 公開済み記事の旧スラッグ → `post_id`。301 で返す |
 | 18 | `speakers` | `:::say` 吹き出しの話者（`slug` で一意・名前・画像・左右） |
-| 19 | `series` | 連載（`lang` + `slug` で一意・説明・状態・表紙・`feed_enabled`・`post_count` / `char_count` のカウンタ） |
+| 19 | `series` | 連載（`lang` + `slug` で一意・説明・状態・表紙・`feed_enabled`・`post_count` / `char_count` のカウンタ・`collection_id` / `collection_order`） |
+| 20 | `collections` | 連載のコレクション（`lang` + `slug` で一意・説明・表紙。状態とカウンタは持たない） |
 
 ### `posts` テーブルの主要カラム
 
@@ -1026,6 +1037,8 @@ ZIP でアップロードしたテーマも、同じ取り込み → 確認 → 
 ```
 
 連載も同じです。`series.tpl.php` を持たないテーマには同梱テーマの目次が使われます（外枠はそのテーマの header / footer、CSS もそのテーマのもの。`hbp-series-*` の class にスタイルを当ててください）。一方、記事ページの前後リンクは、テーマの `post.tpl.php` が出力したときだけ表示されます。`{% include 'series_nav' %}` を書くか、`$post['series']`（`title`・`url`・`status`・`part`・`prev` / `next` ＝ `{title, url}` または null）から自前で組んでください。
+
+コレクションも同じ形です。`collection.tpl.php` は任意で（class は `hbp-collection-*`）、自前の `series.tpl.php` を持つテーマは `{% include 'collection_nav' %}` か `$collectionNav`（`title`・`url`・`prev` / `next`）でコレクションと前後の連載を出力します。記事では `$post['series']['collection']` が `{title, url}` または null です。
 
 ### 3つの鉄則
 

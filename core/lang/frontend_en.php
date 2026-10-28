@@ -68,5 +68,11 @@ return [
     'series_prev'             => '← Previous',
     'series_next'             => 'Next →',
     'series_nav_aria'         => 'Series navigation',
+    'collection_label'        => 'Collection',
+    'collection_series'       => 'Series in this collection',
+    'collection_series_count' => '%d series',
+    'collection_prev'         => '← Previous series',
+    'collection_next'         => 'Next series →',
+    'collection_nav_aria'     => 'Collection navigation',
     'reading_minutes'         => '%d min read',
 ];
